@@ -8,33 +8,45 @@ def f_weight(x):
     # weight update functions for the pre/post-synaptic traces
     # ensure that weight updates in the STDP learning process are bounded within a specific range,
     # preventing them from becoming too large or too small.
+    # The non-negative values of the weights reflect the fact that thalamic connections to V1 are excitatory in nature
     return torch.clamp(x, 0, 1.)  # x, -1, 1
 
 
-def create_moving_bars_stimulus(width, height, bar_width):
-    stimulus = torch.zeros(height, width)
-    stimulus[:, :bar_width] = 1  # bar that starts from the left and moves towards the right
-    # stimulus[:, -bar_width:] = 1 # bar that starts from the right and moves towards the left
+def create_moving_bars_stimulus(batch_size, width, height, bar_width, time_step, total_time_steps):
+    # moving bars stimulus where a vertical line of 1s moves at each time step
+    stimulus = torch.zeros(batch_size, height, width)  # 1 for batch
+    # Calculate the position of the bar based on the time step
+    if time_step < total_time_steps/2:
+        current_position = (time_step % (width - bar_width + 1))  # bar moving from left to right
+    else:
+        current_position = width - bar_width - (time_step % (width - bar_width + 1))  # from right to left
+    # Set the bar at the calculated position
+    stimulus[:, :, current_position: current_position + bar_width] = 1
+    # print("current_position ", current_position)
+    # print("stimulus ", stimulus)
     return stimulus
 
 
 torch.manual_seed(0)
 
 if __name__ == '__main__':
-    w_min, w_max = -1., 1.
-    tau_pre, tau_post = 2., 2.
+    # w_min, w_max = -1., 1.
+    w_min, w_max = 0, 1.
+    # tau_pre, tau_post = 2., 2.
+    tau_pre, tau_post = 6., 6.
     # N_in = 8
-    N_in = 28 * 28  # coresponding to image hight and width (pixels)
+    # N_in = 28 * 28  # corresponding to image hight and width (pixels)
+    N_in = 10 * 10  # corresponding to image hight and width (pixels)
     N_out = 4   # corresponding to neurons for each 4 directions of the moving bar (left, right, up, down)
     # T = 128  # time steps
-    T = 28
+    T = 10
     batch_size = 2  # not used
     lr = 0.01  # learning rate (hyperparameter that controls the size of the step taken during optimization)
 
     net = nn.Sequential(
         torch.nn.Flatten(),  # Flatten the input
         layer.Linear(N_in, N_out, bias=False),  # layers LGN and V1
-        neuron.LIFNode(tau=2.)  # Leaky integrate and Fire neuron model
+        neuron.LIFNode(tau=8.)  # Leaky integrate and Fire neuron model (tau=2.)
     )
 
     # initializes the weights of the linear layer
@@ -47,21 +59,9 @@ if __name__ == '__main__':
     input_size = N_in
     output_size = N_out
     bar_width = 1  # 2
-    # duration = T
-    # speed = 1.0
-
-    # Create the moving bars stimulus
-    # moving_bars_stimulus = create_moving_bars_stimulus(input_size, output_size, bar_width)
-    moving_bars_stimulus = create_moving_bars_stimulus(28, 28, bar_width)
-
-    # Get the height and width of the stimulus
-    # height, width = moving_bars_stimulus.shape
-
-    # Modify the input size in the linear layer
-    # net[1] = layer.Linear(height * width, N_out, bias=False)
 
     # spike-timing-dependent plasticity (STDP) learning
-    learner = learning.STDPLearner(step_mode='s', synapse=net[1], sn=net[2],  # Updated indices
+    learner = learning.STDPLearner(step_mode='s', synapse=net[1], sn=net[2],
                                    tau_pre=tau_pre, tau_post=tau_post,
                                    f_pre=f_weight, f_post=f_weight)
     # 1 time steps corresponds to 10 ms
@@ -71,22 +71,24 @@ if __name__ == '__main__':
     # tau_pre=tau_pre and tau_post=tau_post: time constants for the pre/post-synaptic traces
     # they determine how fast the traces decay over time
     # f_pre=f_weight and f_post=f_weight: weight update functions for the pre/post-synaptic traces
-    # in this case, f_weight is a function that clamps the input between -1 and 1
 
     out_spike = []
     trace_pre = []
     trace_post = []
     weight = []
 
-    for t in range(T):  # iterates over a specified number of time steps
+    for t in range(T*2):  # iterates over a specified number of time steps
+        # for t in range(T):
+        # print("t ", t)
         optimizer.zero_grad()  # clear the gradients of all optimized tensors
 
-        # Use the moving bars stimulus here
-        in_spike = moving_bars_stimulus.view(1, -1)  # reshape to (1, num_inputs) - still necessary?
-        # print("in_spike ", in_spike)
-        # Feeds stimulus (in_spike) through the snn to obtain the output spikes at each neuron
-        out_spike.append(net(in_spike))
-        # out_spike.append(net(moving_bars_stimulus))
+        # Create the moving bars stimulus
+        # moving_bars_stimulus = create_moving_bars_stimulus(1, 28, 28, bar_width, t)
+        moving_bars_stimulus = create_moving_bars_stimulus(1, 10, 10, bar_width, t, 2*T)
+        # print("moving_bars_stimulus ", moving_bars_stimulus)
+
+        # Feeds stimulus (moving_bars_stimulus) through the snn to obtain the output spikes at each neuron
+        out_spike.append(net(moving_bars_stimulus))
         # print("out_spike ", out_spike)
         learner.step(on_grad=True)  # advance the STDP learning process for one time step
         optimizer.step()  # update the model parameters (e.g weights) based on the computed gradients
@@ -97,51 +99,41 @@ if __name__ == '__main__':
         trace_post.append(learner.trace_post)  # appends the current post-synaptic trace to the trace_post list
         # used for monitoring how the pre/post-synaptic trace evolves during training
 
-    out_spike = torch.stack(out_spike)  # [T, batch_size, N_out]
-    trace_pre = torch.stack(trace_pre)  # [T, batch_size, N_in]
-    trace_post = torch.stack(trace_post)  # [T, batch_size, N_out]
-    weight = torch.stack(weight)  # [T, N_out, N_in]
+    # creating subplots for plotting
+    fig, axes = plt.subplots(4, 1, figsize=(8, 10))
 
-    t = torch.arange(0, len(out_spike)).float()  # Use len(out_spike) to get the correct size
-    # creating a time tensor t with values representing each time step in the simulation
-    # print("t ", t)
+    # plotting the input stimulus
+    axes[0].imshow(moving_bars_stimulus.squeeze(), cmap='gray', aspect='auto')
+    axes[0].set_title('Input Stimulus')
+    axes[0].set_xlabel('Time Steps')
+    axes[0].set_ylabel('Neurons')
 
-    # in_spike = moving_bars_stimulus[:, 0, 0]
-    out_spike = out_spike[:, 0, :]
-    # [T, batch_size, N_out] where T: number of time steps, batch_size: number of samples in a batch,
-    # N_out: number of output neurons. [:, 0, :] extracts the spikes of all 8 neurons
-    # for each time step for the first batch sample
-    trace_pre = trace_pre[:, 0, :]
-    trace_post = trace_post[:, 0, :]
-    weight = weight[:, 0, :]
-    # extract the weights connecting all output neurons to all input neurons for each time step
+    # plotting the output spikes
+    axes[1].imshow(torch.stack(out_spike).squeeze().detach().numpy(), cmap='gray', aspect='auto', vmin=0, vmax=1)
+    axes[1].set_title('Output Spikes')
+    axes[1].set_xlabel('Time Steps')
+    axes[1].set_ylabel('Neurons')
 
-    # Plotting
-    # Store the input and output spikes for plotting
-    input_spikes = moving_bars_stimulus.view(-1).numpy()
-    output_spikes = out_spike.detach().numpy()  # Use detach() to remove the gradient information
+    # plotting the pre-synaptic trace
+    axes[2].plot(torch.stack(trace_pre).squeeze().detach().numpy().T)
+    axes[2].set_title('Pre-synaptic Trace')
+    axes[2].set_xlabel('Time Steps')
+    axes[2].set_ylabel('Neurons')
 
-    # Plotting
-    plt.figure(figsize=(10, 6))
-
-    # Plot input spikes
-    input_spike_times = torch.nonzero(torch.from_numpy(input_spikes)).numpy()
-    plt.subplot(2, 1, 1)
-    plt.eventplot(input_spike_times, colors='b', lineoffsets=0)
-    plt.title('Input Spikes')
-    plt.xlabel('Time Step')
-    plt.ylabel('Neuron Index')
-
-    # Plot output spikes
-    plt.subplot(2, 1, 2)
-    for neuron_idx in range(N_out):
-        spike_times = torch.nonzero(torch.from_numpy(output_spikes[:, neuron_idx])).numpy()
-        plt.eventplot(spike_times, colors='r', lineoffsets=neuron_idx, label=f'Neuron {neuron_idx + 1}')
-
-    plt.title('Output Spikes')
-    plt.xlabel('Time Step')
-    plt.ylabel('Neuron Index')
-    plt.legend()
+    # plotting the post-synaptic trace
+    axes[3].plot(torch.stack(trace_post).squeeze().detach().numpy().T)
+    axes[3].set_title('Post-synaptic Trace')
+    axes[3].set_xlabel('Time Steps')
+    axes[3].set_ylabel('Neurons')
 
     plt.tight_layout()
     plt.show()
+
+    # collecting the output spikes
+    out_spike = torch.stack(out_spike).squeeze().detach().numpy()
+
+    # print output spikes for each neuron in each time step
+    for neuron_idx in range(out_spike.shape[1]):
+        print(f'Neuron {neuron_idx + 1} Output Spikes:')
+        print(out_spike[:, neuron_idx])
+        print('\n')
