@@ -1,139 +1,319 @@
 import torch
 import torch.nn as nn
-from spikingjelly.activation_based import neuron, layer, learning
+from spikingjelly.activation_based import neuron, layer, learning, functional
+import torch.nn.functional as F
 from matplotlib import pyplot as plt
+import numpy as np
+import random
+from plasticity import STDPLearner
+
+random.seed(1)
+# torch.manual_seed(0)
+
+direction_choice = 'left_to_right'
 
 
-def f_weight(x):
-    # weight update functions for the pre/post-synaptic traces
-    # ensure that weight updates in the STDP learning process are bounded within a specific range,
-    # preventing them from becoming too large or too small.
-    # The non-negative values of the weights reflect the fact that thalamic connections to V1 are excitatory in nature
-    return torch.clamp(x, 0, 1.)  # x, -1, 1
+def create_moving_bars_stimulus_with_delay_and_labels(batch_size, width, height, bar_width, time_step, synaptic_delay=1):
+    p_left = 0.5  # probability of moving to the left
+    # moving bars stimulus with synaptic delay and labels
+    current_stimulus = torch.zeros(batch_size, height, width)
+    delayed_stimulus = torch.zeros(batch_size, height, width)
+
+    # time_step = time_step % width
+
+    global direction_choice
+
+    # Check if a direction change is needed
+    # if time_step % width == 0:
+    # if (time_step % width == 0) or (time_step == T - 1):
+    if time_step == 0:
+        # Randomly choose a new direction
+        # direction_choice = random.choice(['left_to_right', 'right_to_left'])
+        # Randomly choose the direction based on probability p_left
+        direction_choice = 'left_to_right' if random.random() < p_left else 'right_to_left'
+        print("!!!! direction_choice ", direction_choice)
+
+    if 1 <= time_step <= 10:
+        # Calculate the position of the bar based on the time step and direction choice
+        if direction_choice == 'left_to_right':
+            # Bar moving from left to right
+            # current_position = min(time_step, width - bar_width)
+            current_position = min(time_step-1, width - bar_width)
+        elif direction_choice == 'right_to_left':
+            # Bar moving from right to left, and waiting at the end
+            # current_position = max(0, (width - time_step - 1))
+            current_position = max(0, (width - time_step + 1 - 1))
+        else:
+            raise ValueError("Invalid direction choice. Use 'left_to_right' or 'right_to_left'.")
+        # import pdb;pdb.set_trace()
+        current_stimulus[:, :, current_position: current_position + bar_width] = 1
+
+    if 2 <= time_step <= 11:
+        if direction_choice == 'left_to_right':
+            delayed_position = min(time_step-2, width - bar_width)
+        elif direction_choice == 'right_to_left':
+            delayed_position = max(0, (width - time_step + 2 - 1))
+        delayed_stimulus[:, :, delayed_position: delayed_position + bar_width] = 1
 
 
-def create_moving_bars_stimulus(batch_size, width, height, bar_width, time_step, total_time_steps):
-    # moving bars stimulus where a vertical line of 1s moves at each time step
-    stimulus = torch.zeros(batch_size, height, width)  # 1 for batch
-    # Calculate the position of the bar based on the time step
-    if time_step < total_time_steps/2:
-        current_position = (time_step % (width - bar_width + 1))  # bar moving from left to right
-    else:
-        current_position = width - bar_width - (time_step % (width - bar_width + 1))  # from right to left
-    # Set the bar at the calculated position
-    stimulus[:, :, current_position: current_position + bar_width] = 1
-    # print("current_position ", current_position)
-    # print("stimulus ", stimulus)
-    return stimulus
+    combinedinput = torch.stack([current_stimulus, delayed_stimulus], dim=1)
 
+    # Determine label based on the relative position of the bars
+    # label = torch.tensor(1.0 if direction_choice == 'left_to_right' else 0.0, dtype=torch.float32)
+    label = torch.tensor([0, 1] if direction_choice == 'left_to_right' else [1, 0], dtype=torch.float32)
 
-torch.manual_seed(0)
+    return combinedinput, label
+
 
 if __name__ == '__main__':
     # w_min, w_max = -1., 1.
     w_min, w_max = 0, 1.
+    # tau_pre, tau_post = 6., 6.  # too much 20
+    tau_pre, tau_post = 20., 20.
+    # tau_pre, tau_post = 15.0, 15.0
     # tau_pre, tau_post = 2., 2.
-    tau_pre, tau_post = 6., 6.
-    # N_in = 8
-    # N_in = 28 * 28  # corresponding to image hight and width (pixels)
     N_in = 10 * 10  # corresponding to image hight and width (pixels)
-    N_out = 4   # corresponding to neurons for each 4 directions of the moving bar (left, right, up, down)
-    # T = 128  # time steps
-    T = 10
-    batch_size = 2  # not used
-    lr = 0.01  # learning rate (hyperparameter that controls the size of the step taken during optimization)
+    N_out = 2   # corresponding to neurons for each direction of the moving bar (left, right, up, down)
+    S = 1000
+    batch_size = 1
+    width = 10
+    height = 10
+    # lr = 0.1  # the good one
+    lr = 0.01  # (adam)
+
+    loss_values = []
 
     net = nn.Sequential(
-        torch.nn.Flatten(),  # Flatten the input
-        layer.Linear(N_in, N_out, bias=False),  # layers LGN and V1
-        neuron.LIFNode(tau=8.)  # Leaky integrate and Fire neuron model (tau=2.)
+        nn.Flatten(),  # Flatten the input
+        nn.Linear(2 * N_in, N_out, bias=False),
+        neuron.LIFNode(tau=10.0, v_threshold=float('inf'))  # infinite threshold
     )
-
     # initializes the weights of the linear layer
-    nn.init.constant_(net[1].weight.data, 0.4)
-    #  initializes the stochastic gradient descent (SGD) optimizer for training the snn
-    optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.)
+    # nn.init.constant_(net[1].weight.data, 0.4)
+    # nn.init.normal_(net[1].weight.data, mean=0.4)
+    # nn.init.normal_(net[1].weight.data, mean=0.4, std=0.01)
+    nn.init.uniform_(net[1].weight.data, -0.1, 0.1)
+    # torch.nn.init.uniform_(net[1].weight.data, -1., 1.)
+    # nn.init.uniform_(net[1].weight.data, 0.1, 0.4)
+    # nn.init.xavier_uniform_(net[1].weight)
+    # nn.init.uniform_(net[1].weight, a=-0.1, b=0.1)
+    # initializes the stochastic gradient descent (SGD) optimizer for training the snn
+    # Define the loss function and optimizer
+    # optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.)
+    # optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(net.parameters(), lr=lr)
+
     # momentum (factor): a technique that helps accelerate SGD in the relevant direction and dampens oscillations.
-    # momentum value of 0 means that there is no momentum applied in this case
+    # momentum value of 0 means that there is nlearner.step(on_grad=True)o momentum applied in this case
 
     input_size = N_in
     output_size = N_out
-    bar_width = 1  # 2
-
-    # spike-timing-dependent plasticity (STDP) learning
-    learner = learning.STDPLearner(step_mode='s', synapse=net[1], sn=net[2],
-                                   tau_pre=tau_pre, tau_post=tau_post,
-                                   f_pre=f_weight, f_post=f_weight)
-    # 1 time steps corresponds to 10 ms
-    # step_mode='s' -> updates are applied at every time step
-    # synapse (connection weights) to be updated (linear layer)
-    # sn=net[2]: specifies the spiking neuron model to be used (LIF)
-    # tau_pre=tau_pre and tau_post=tau_post: time constants for the pre/post-synaptic traces
-    # they determine how fast the traces decay over time
-    # f_pre=f_weight and f_post=f_weight: weight update functions for the pre/post-synaptic traces
+    bar_width = 1
 
     out_spike = []
     trace_pre = []
     trace_post = []
     weight = []
+    potential = []
 
-    for t in range(T*2):  # iterates over a specified number of time steps
-        # for t in range(T):
-        # print("t ", t)
-        optimizer.zero_grad()  # clear the gradients of all optimized tensors
+    # Collect spike times
+    spike_times = []
 
-        # Create the moving bars stimulus
-        # moving_bars_stimulus = create_moving_bars_stimulus(1, 28, 28, bar_width, t)
-        moving_bars_stimulus = create_moving_bars_stimulus(1, 10, 10, bar_width, t, 2*T)
-        # print("moving_bars_stimulus ", moving_bars_stimulus)
+    # Initialize an empty list to store weight data over time
+    weights_over_time = []
+    weight_history = []
 
-        # Feeds stimulus (moving_bars_stimulus) through the snn to obtain the output spikes at each neuron
-        out_spike.append(net(moving_bars_stimulus))
-        # print("out_spike ", out_spike)
-        learner.step(on_grad=True)  # advance the STDP learning process for one time step
-        optimizer.step()  # update the model parameters (e.g weights) based on the computed gradients
-        net[1].weight.data.clamp_(w_min, w_max)  # Update index to 1 to access the linear layer
-        weight.append(net[1].weight.data.clone())
-        # to keep track of how the weights change over time
-        trace_pre.append(learner.trace_pre)  # appends the current pre-synaptic trace to the trace_pre list.
-        trace_post.append(learner.trace_post)  # appends the current post-synaptic trace to the trace_post list
-        # used for monitoring how the pre/post-synaptic trace evolves during training
+    # List to store the selected weight value at each time step
+    selected_weight_history = []
 
-    # creating subplots for plotting
-    fig, axes = plt.subplots(4, 1, figsize=(8, 10))
+    print("TRAINING---------->")
+    total_correct = 0
+    total_samples = 0
+    # accumulated_labels = []
+    accumulated_labels = torch.tensor([])
+    # accumulated_potentials = torch.zeros(2, 10)
+    # accumulated_potentials = torch.zeros(2, 9)
+    accumulated_potentials = torch.zeros(2, 13)
+    print("!! accumulated_potentials ", accumulated_potentials)
+    correct2 = 0
+    for s in range(S):
+        print("sample ", s)
+        optimizer.zero_grad()
+        for i in range(13):
+            print("i ", i)
+            # Create the moving bars stimulus
+            combined_input, label = create_moving_bars_stimulus_with_delay_and_labels(batch_size=1, width=10, height=10,
+                                                                                      bar_width=1, time_step=i)
+            print(combined_input)
+            output = net(combined_input)
+            mp = net[2].v
+            print("mps ", mp)
+            # accumulated_potentials[:, i] = mp.squeeze()
+            accumulated_potentials[:, i] = mp
+            print("accumulated_potentials ", accumulated_potentials)
+            # label = label.long()
+            print("direction_choice ", direction_choice)
+            print("label ", label)
 
-    # plotting the input stimulus
-    axes[0].imshow(moving_bars_stimulus.squeeze(), cmap='gray', aspect='auto')
-    axes[0].set_title('Input Stimulus')
-    axes[0].set_xlabel('Time Steps')
-    axes[0].set_ylabel('Neurons')
+        max_values, max_indices = torch.max(accumulated_potentials, dim=1)
+        indices_tensor = torch.arange(accumulated_potentials.shape[0])
+        highest_values_tensor = accumulated_potentials[indices_tensor, max_indices]
+        print("highest_values_tensor ", highest_values_tensor)
+        print("label ", label)
 
-    # plotting the output spikes
-    axes[1].imshow(torch.stack(out_spike).squeeze().detach().numpy(), cmap='gray', aspect='auto', vmin=0, vmax=1)
-    axes[1].set_title('Output Spikes')
-    axes[1].set_xlabel('Time Steps')
-    axes[1].set_ylabel('Neurons')
+        loss = F.cross_entropy(highest_values_tensor, label)
+        print("direction_choice ", direction_choice)
+        # accumulated_labels = torch.tensor([])
 
-    # plotting the pre-synaptic trace
-    axes[2].plot(torch.stack(trace_pre).squeeze().detach().numpy().T)
-    axes[2].set_title('Pre-synaptic Trace')
-    axes[2].set_xlabel('Time Steps')
-    axes[2].set_ylabel('Neurons')
+        print("loss ", loss)
+        # import pdb;pdb.set_trace()
+        # predicted_label = torch.argmax(accumulated_potentials, dim=0)
+        active_neuron = torch.argmax(accumulated_potentials)
+        # predicted_label = torch.argmax(accumulated_potentials, dim=1)
+        print("active_neuron ", active_neuron)
+        if active_neuron < 13:
+            active_neuron = torch.tensor([1, 0])
+        else:
+            active_neuron = torch.tensor([0, 1])
+        print("active_neuron ", active_neuron)
+        # print("overall_label ", overall_label)
+        # import pdb;pdb.set_trace()
+        accuracy = torch.sum(active_neuron[0] == label[0]).item() / 10 * 100.0
+        accuracy3 = torch.sum(active_neuron[0] == label[0]).item() * 100.0
+        # accuracy = torch.sum(predicted_label == overall_label).item() / 10 * 100.0
+        print("accuracy ", accuracy)
+        print("accuracy ", accuracy3)
+        correct = active_neuron == label
+        # correct = predicted_label == overall_label
+        print("correct ", correct)
+        total_correct += correct.sum().item()
+        print("total_correct ", total_correct)
 
-    # plotting the post-synaptic trace
-    axes[3].plot(torch.stack(trace_post).squeeze().detach().numpy().T)
-    axes[3].set_title('Post-synaptic Trace')
-    axes[3].set_xlabel('Time Steps')
-    axes[3].set_ylabel('Neurons')
+        correct2 += (active_neuron[0] == label[0]).sum()
+        print("correct2 ", correct2)
+        print("total_correct ", total_correct)
 
-    plt.tight_layout()
+        # Store the weights for later analysis
+        weight_history.append(net[1].weight.data.clone())
+
+        loss_values.append(loss.item())
+        loss.backward(retain_graph=True)
+        optimizer.step()
+        weight.append(net[1].weight.data.clone().numpy().flatten())
+        if s == S-1:
+            print(s)
+            # final_weights = net[1].weight.data.clone().numpy().flatten()
+            final_weights = net[1].weight.data.clone()
+            print("final_weights ", final_weights)
+        functional.reset_net(net)
+        # accumulated_potentials = torch.zeros(1, 2)
+        # accumulated_potentials = torch.zeros(2, 9)
+        accumulated_potentials = torch.zeros(2, 13)
+
+    # average_accuracy = (total_correct / (10 * S)) * 100.0
+    average_accuracy = (total_correct / 2 / S) * 100.0
+
+    accuracy2 = 100 * correct2 / S
+    print("Accuracy2 = {}".format(accuracy2))
+    print(f'Average Accuracy over {S} samples: {average_accuracy:.2f}%')
+
+    # accuracy_training = total_correct / T
+    # print(f'Training Overall Accuracy: {accuracy_training * 100:.2f}%')
+
+    # Transpose the data to have time on the x-axis
+    # Plot the final weights as a heatmap
+    # final_weights = final_weights2[-1]
+
+    # final_weights = weight_history[-1]
+
+    final_weights_reshaped = final_weights.view(2, 2, 10, 10)
+
+    # Create a 2x2 subplot grid
+    fig, axs = plt.subplots(2, 2)
+
+    # Plot the weights for each neuron
+    for neuron_index in range(2):
+        for frame_index in range(2):
+            ax = axs[neuron_index, frame_index]
+            im = ax.imshow(final_weights_reshaped[neuron_index, frame_index].detach().numpy(), cmap='viridis',
+                           origin='upper')
+            ax.set_title(f'Weights for Neuron {neuron_index + 1} Frame {frame_index + 1}')
+            ax.axis('off')
+
+    # Add a colorbar
+    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+    fig.colorbar(im, cax=cbar_ax)
+
     plt.show()
 
-    # collecting the output spikes
-    out_spike = torch.stack(out_spike).squeeze().detach().numpy()
+    print("TESTING---------->")
+    net.eval()
+    R = 10
+    all_predictions = torch.tensor([])
+    all_true_labels = torch.tensor([])
+    correct = 0
+    total_correct = 0
+    total_samples = 0
+    total_time_steps = 0
+    for r in range(0):
 
-    # print output spikes for each neuron in each time step
-    for neuron_idx in range(out_spike.shape[1]):
-        print(f'Neuron {neuron_idx + 1} Output Spikes:')
-        print(out_spike[:, neuron_idx])
-        print('\n')
+        # Generate a test stimulus
+        test_input, true_label = create_moving_bars_stimulus_with_delay_and_labels(batch_size=1, width=10, height=10,
+                                                                                   bar_width=1, time_step=r)
+        print("direction_choice ", direction_choice)
+        print("test input ", test_input)
+        # print("test input shape ", test_input.shape)
+        print("true label ", true_label)
+        with torch.no_grad():
+            output = net(test_input)
+
+        mp = net[2].v
+        print("mps ", mp)
+
+        # Interpret the output to get predictions
+        # predictions = (output > 0.5).float()
+        # Post-process membrane potentials if needed (e.g., choose the neuron with higher potential)
+        predicted_label = torch.argmax(mp)
+        print("predicted_label ", predicted_label)
+        # print("predictions ", predictions)
+
+        # Compare predictions with true labels
+        # accuracy = torch.sum(predictions == true_label).item() / batch_size
+        accuracy = (predicted_label == true_label).item()
+        # print(f'Test Accuracy: {accuracy * 100:.2f}%')
+        print(f'Test Accuracy for time step {r + 1}: {accuracy * 100:.2f}%')
+
+        correct += (output == true_label).sum().item()
+        print("correct ", correct)
+
+        # Convert true_label to a one-dimensional tensor
+        true_label2 = true_label.view(1)
+        # predictions2 = predictions.view(1)
+        predictions2 = predicted_label.view(1)
+
+        # Initialize all_true_labels if it's empty
+        # if all_true_labels.numel() == 0:
+        #    all_true_labels = torch.tensor([])
+
+        batch_correct = torch.sum(predicted_label == true_label).item()
+        # batch_samples = true_label.size(0)
+        total_correct += batch_correct
+        # total_samples += batch_samples
+        total_time_steps += 1
+
+        # Accumulate predictions and true labels
+        all_predictions = torch.cat((all_predictions, predictions2))
+        print("all_predictions ", all_predictions)
+        all_true_labels = torch.cat((all_true_labels, true_label2))
+        print("all_true_labels ", all_true_labels)
+
+        # detach and reset membrane potential/threshold
+        functional.reset_net(net)
+
+
+
+    plt.plot(loss_values, label='Training Loss')
+    plt.xlabel('Samples')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
