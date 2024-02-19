@@ -246,6 +246,12 @@ if __name__ == '__main__':
 
     plt.show()
 
+    plt.plot(loss_values, label='Training Loss')
+    plt.xlabel('Samples')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+
     print("TESTING---------->")
     net.eval()
     R = 10
@@ -255,65 +261,75 @@ if __name__ == '__main__':
     total_correct = 0
     total_samples = 0
     total_time_steps = 0
-    for r in range(0):
+    for r in range(R):
+        print("sample ", r)
+        optimizer.zero_grad()
+        for i in range(13):
+            print("i ", i)
+            # Create the moving bars stimulus
+            combined_input, label = create_moving_bars_stimulus_with_delay_and_labels(batch_size=1, width=10, height=10,
+                                                                                      bar_width=1, time_step=i)
+            # print(combined_input)
+            output = net(combined_input)
+            mp = net[2].v
+            print("mps ", mp)
+            accumulated_potentials[:, i] = mp
+            print("accumulated_potentials ", accumulated_potentials)
+            print("direction_choice ", direction_choice)
+            print("label ", label)
 
-        # Generate a test stimulus
-        test_input, true_label = create_moving_bars_stimulus_with_delay_and_labels(batch_size=1, width=10, height=10,
-                                                                                   bar_width=1, time_step=r)
+        max_values, max_indices = torch.max(accumulated_potentials, dim=1)
+        indices_tensor = torch.arange(accumulated_potentials.shape[0])
+        highest_values_tensor = accumulated_potentials[indices_tensor, max_indices]
+        print("highest_values_tensor ", highest_values_tensor)
+        print("label ", label)
+
         print("direction_choice ", direction_choice)
-        print("test input ", test_input)
-        # print("test input shape ", test_input.shape)
-        print("true label ", true_label)
-        with torch.no_grad():
-            output = net(test_input)
 
-        mp = net[2].v
-        print("mps ", mp)
-
-        # Interpret the output to get predictions
-        # predictions = (output > 0.5).float()
-        # Post-process membrane potentials if needed (e.g., choose the neuron with higher potential)
-        predicted_label = torch.argmax(mp)
-        print("predicted_label ", predicted_label)
-        # print("predictions ", predictions)
-
-        # Compare predictions with true labels
-        # accuracy = torch.sum(predictions == true_label).item() / batch_size
-        accuracy = (predicted_label == true_label).item()
-        # print(f'Test Accuracy: {accuracy * 100:.2f}%')
-        print(f'Test Accuracy for time step {r + 1}: {accuracy * 100:.2f}%')
-
-        correct += (output == true_label).sum().item()
+        print("loss ", loss)
+        # predicted_label = torch.argmax(accumulated_potentials, dim=0)
+        active_neuron = torch.argmax(accumulated_potentials)
+        # predicted_label = torch.argmax(accumulated_potentials, dim=1)
+        print("active_neuron ", active_neuron)
+        if active_neuron < 13:
+            active_neuron = torch.tensor([1, 0])
+        else:
+            active_neuron = torch.tensor([0, 1])
+        print("active_neuron ", active_neuron)
+        # print("overall_label ", overall_label)
+        # import pdb;pdb.set_trace()
+        accuracy = torch.sum(active_neuron[0] == label[0]).item() / 10 * 100.0
+        accuracy3 = torch.sum(active_neuron[0] == label[0]).item() * 100.0
+        # accuracy = torch.sum(predicted_label == overall_label).item() / 10 * 100.0
+        print("accuracy ", accuracy)
+        print("accuracy ", accuracy3)
+        correct = active_neuron == label
+        # correct = predicted_label == overall_label
         print("correct ", correct)
+        total_correct += correct.sum().item()
+        print("total_correct ", total_correct)
 
-        # Convert true_label to a one-dimensional tensor
-        true_label2 = true_label.view(1)
-        # predictions2 = predictions.view(1)
-        predictions2 = predicted_label.view(1)
+        correct2 += (active_neuron[0] == label[0]).sum()
+        print("correct2 ", correct2)
+        print("total_correct ", total_correct)
 
-        # Initialize all_true_labels if it's empty
-        # if all_true_labels.numel() == 0:
-        #    all_true_labels = torch.tensor([])
+        # Store the weights for later analysis
+        weight_history.append(net[1].weight.data.clone())
 
-        batch_correct = torch.sum(predicted_label == true_label).item()
-        # batch_samples = true_label.size(0)
-        total_correct += batch_correct
-        # total_samples += batch_samples
-        total_time_steps += 1
-
-        # Accumulate predictions and true labels
-        all_predictions = torch.cat((all_predictions, predictions2))
-        print("all_predictions ", all_predictions)
-        all_true_labels = torch.cat((all_true_labels, true_label2))
-        print("all_true_labels ", all_true_labels)
-
-        # detach and reset membrane potential/threshold
+        weight.append(net[1].weight.data.clone().numpy().flatten())
+        if r == R-1:
+            print(r)
+            # final_weights = net[1].weight.data.clone().numpy().flatten()
+            final_weights = net[1].weight.data.clone()
+            print("final_weights ", final_weights)
         functional.reset_net(net)
+        # accumulated_potentials = torch.zeros(1, 2)
+        # accumulated_potentials = torch.zeros(2, 9)
+        accumulated_potentials = torch.zeros(2, 13)
 
+    average_accuracy = (total_correct / 2 / R) * 100.0
 
+    accuracy2 = 100 * correct2 / R
+    print("Accuracy2 = {}".format(accuracy2))
+    print(f'Average Accuracy over {S} samples: {average_accuracy:.2f}%')
 
-    plt.plot(loss_values, label='Training Loss')
-    plt.xlabel('Samples')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.show()
