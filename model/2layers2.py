@@ -55,7 +55,6 @@ def create_moving_bars_stimulus_with_delay_and_labels(batch_size, width, height,
             delayed_position = max(0, (width - time_step + 2 - 1))
         delayed_stimulus[:, :, delayed_position: delayed_position + bar_width] = 1
 
-
     combinedinput = torch.stack([current_stimulus, delayed_stimulus], dim=1)
 
     # Determine label based on the relative position of the bars
@@ -254,7 +253,7 @@ if __name__ == '__main__':
 
     print("TESTING---------->")
     net.eval()
-    R = 10
+    R = 0
     all_predictions = torch.tensor([])
     all_true_labels = torch.tensor([])
     correct = 0
@@ -326,10 +325,10 @@ if __name__ == '__main__':
         # accumulated_potentials = torch.zeros(1, 2)
         # accumulated_potentials = torch.zeros(2, 9)
         accumulated_potentials = torch.zeros(2, 13)
+    if R:
+        average_accuracy = (total_correct / 2 / R) * 100.0
 
-    average_accuracy = (total_correct / 2 / R) * 100.0
-
-    accuracy2 = 100 * correct2 / R
-    print("Accuracy2 = {}".format(accuracy2))
-    print(f'Average Accuracy over {S} samples: {average_accuracy:.2f}%')
+        accuracy2 = 100 * correct2 / R
+        print("Accuracy2 = {}".format(accuracy2))
+        print(f'Average Accuracy over {S} samples: {average_accuracy:.2f}%')
 

@@ -83,13 +83,17 @@ def create_moving_bars_stimulus_with_delay_and_labels(batch_size, width, height,
 
     # Create the label based on the chosen direction
     if direction_choice == "up":
-        label = torch.tensor([1, 0, 0, 0], dtype=torch.float32)
+        # label = torch.tensor([1, 0, 0, 0], dtype=torch.float32)
+        label = torch.tensor([1, 0, 0, 0, 1, 0, 0, 0], dtype=torch.float32)
     elif direction_choice == "down":
-        label = torch.tensor([0, 1, 0, 0], dtype=torch.float32)
+        # label = torch.tensor([0, 1, 0, 0], dtype=torch.float32)
+        label = torch.tensor([0, 1, 0, 0, 0, 1, 0, 0], dtype=torch.float32)
     elif direction_choice == "left":
-        label = torch.tensor([0, 0, 1, 0], dtype=torch.float32)
+        # label = torch.tensor([0, 0, 1, 0], dtype=torch.float32)
+        label = torch.tensor([0, 0, 1, 0, 0, 0, 1, 0], dtype=torch.float32)
     else:
-        label = torch.tensor([0, 0, 0, 1], dtype=torch.float32)
+        # label = torch.tensor([0, 0, 0, 1], dtype=torch.float32)
+        label = torch.tensor([0, 0, 0, 1, 0, 0, 0, 1], dtype=torch.float32)
 
     return torch.stack([current_stimulus, delayed_stimulus], dim=1), label
 
@@ -102,14 +106,15 @@ if __name__ == '__main__':
     # tau_pre, tau_post = 15.0, 15.0
     # tau_pre, tau_post = 2., 2.
     N_in = 10 * 10  # corresponding to image hight and width (pixels)
-    N_out = 4   # corresponding to neurons for each direction of the moving bar (left, right, up, down)
+    # N_out = 4   # corresponding to neurons for each direction of the moving bar (left, right, up, down)
+    N_out = 8
     S = 2000
     # S = 10
     batch_size = 1
     width = 10
     height = 10
-    lr = 0.1  # the good one
-    # lr = 0.01  # (adam)
+    # lr = 0.1  # the good one
+    lr = 0.01  # (adam) better for 8 neurons
     # lr = 0.001
 
     # pl = PositiveLinear(in_features=2 * N_in, out_features=N_out)
@@ -119,15 +124,17 @@ if __name__ == '__main__':
     net = nn.Sequential(
         nn.Flatten(),  # Flatten the input
         # nn.Linear(2 * N_in, N_out, bias=False),
-        # pl,
         CustomLinear(2 * N_in, N_out, bias=False),
-        neuron.LIFNode(tau=10.0, v_threshold=float('inf'))  # infinite threshold
+        # neuron.LIFNode(tau=10.0, v_threshold=float('inf'))  # infinite threshold
+        # neuron.LIFNode(tau=2.0, v_threshold=float('inf'))  # infinite threshold
+        neuron.LIFNode(tau=5.0, v_threshold=float('inf'))  # infinite threshold
     )
     # initializes the weights of the linear layer
 
     # nn.init.uniform_(net[1].weight.data, -0.1, 0.1)
     # nn.init.normal_(net[1].weight.data, mean=0.1)
-    nn.init.uniform_(net[1].weight.data, 0.0, 1.0)
+    # nn.init.uniform_(net[1].weight.data, 0.0, 1.0) # chosen one
+    nn.init.uniform_(net[1].weight.data, 0.1, 0.6)
 
     optimizer = torch.optim.AdamW(net.parameters(), lr=lr)
 
@@ -153,18 +160,17 @@ if __name__ == '__main__':
 
     print("TRAINING---------->")
     total_correct = 0
-    total_correctx = 0
-    total_samples = 0
     # accumulated_labels = []
-    accumulated_labels = torch.tensor([])
     # accumulated_potentials = torch.zeros(2, 10)
     # accumulated_potentials = torch.zeros(2, 9)
-    accumulated_potentials = torch.zeros(4, 13)
+
+    # accumulated_potentials = torch.zeros(4, 13)
+    accumulated_potentials = torch.zeros(8, 13)
+
     # potentials_history = torch.zeros(S, 13, 4)
-    potentials_history = torch.zeros(S, N_out)
+    # potentials_history = torch.zeros(S, N_out)
     stimulus_labels = []
     print("!! accumulated_potentials ", accumulated_potentials)
-    correct2 = 0
     for s in range(S):
         print("sample ", s)
         optimizer.zero_grad()
@@ -182,7 +188,6 @@ if __name__ == '__main__':
             print("accumulated_potentials ", accumulated_potentials)
             # label = label.long()
             print("direction_choice ", direction_choice)
-            print("label ", label)
 
         max_values, max_indices = torch.max(accumulated_potentials, dim=1)
         indices_tensor = torch.arange(accumulated_potentials.shape[0])
@@ -195,48 +200,15 @@ if __name__ == '__main__':
         # accumulated_labels = torch.tensor([])
         print("loss ", loss)
 
-        # potentials_history[:, s] = accumulated_potentials
-        # potentials_history[s] = accumulated_potentials
-        potentials_history[s] = highest_values_tensor
-        stimulus_labels.append(direction_choice)
-
         # import pdb;pdb.set_trace()
         # predicted_label = torch.argmax(accumulated_potentials, dim=0)
-        active_neuron = torch.argmax(accumulated_potentials)
+        active_neuron = torch.argmax(highest_values_tensor)
         # predicted_label = torch.argmax(accumulated_potentials, dim=1)
         print("active_neuron ", active_neuron)
-        if active_neuron < 13:  # up
-            active_neuron = torch.tensor([1, 0, 0, 0], dtype=torch.float32)
-        elif 13 <= active_neuron < 26:  # down
-            active_neuron = torch.tensor([0, 1, 0, 0], dtype=torch.float32)
-        elif 26 <= active_neuron < 39:  # left
-            active_neuron = torch.tensor([0, 0, 1, 0], dtype=torch.float32)
-        else:  # right
-            active_neuron = torch.tensor([0, 0, 0, 1], dtype=torch.float32)
-        print("active_neuron ", active_neuron)
-        # print("overall_label ", overall_label)
-        # import pdb;pdb.set_trace()
-        accuracy = torch.sum(active_neuron[0] == label[0]).item() / 10 * 100.0
-        accuracy3 = torch.sum(active_neuron[0] == label[0]).item() * 100.0
-        # accuracy3 = torch.sum(active_neuron[0] == label[0]).item() * 100.0
-        # torch.equal(active_neuron, label)
-        # accuracy = torch.sum(predicted_label == overall_label).item() / 10 * 100.0
-        print("accuracy ", accuracy)
-        print("accuracy ", accuracy3)
-        correct = active_neuron == label
-        # correct = predicted_label == overall_label
-        print("correct ", correct)
-        total_correct += correct.sum().item()
-        print("total_correct ", total_correct)
+        if label[active_neuron] == 1:
+            print("correct!")
+            total_correct += 1
 
-        if torch.equal(active_neuron, label):
-            print("active_neuron ", active_neuron)
-            print("label ", label)
-            total_correctx += 1
-            print("total_correctx ", total_correctx)
-
-        correct2 += (active_neuron[0] == label[0]).sum()
-        print("correct2 ", correct2)
         print("total_correct ", total_correct)
 
         # Store the weights for later analysis
@@ -254,42 +226,25 @@ if __name__ == '__main__':
         functional.reset_net(net)
         # accumulated_potentials = torch.zeros(1, 2)
         # accumulated_potentials = torch.zeros(2, 9)
-        accumulated_potentials = torch.zeros(4, 13)
+        accumulated_potentials = torch.zeros(8, 13)
 
-    # average_accuracy = (total_correct / (10 * S)) * 100.0
-    average_accuracy = (total_correct / 2 / S) * 100.0
+    accuracy = total_correct / S
+    print(f'Accuracy for training: {accuracy:.2%}')
 
-    accuracy2 = 100 * correct2 / S
-    print("Accuracy2 = {}".format(accuracy2))
-    print(f'Average Accuracy over {S} samples: {average_accuracy:.2f}%')
-
-    accuracyx = 100 * total_correctx / S
-    print("AccuracyX = {}".format(accuracyx))
-
-    # accuracy_training = total_correct / T
-    # print(f'Training Overall Accuracy: {accuracy_training * 100:.2f}%')
-
-    # Transpose the data to have time on the x-axis
-    # Plot the final weights as a heatmap
-    # final_weights = final_weights2[-1]
-
-    # final_weights = weight_history[-1]
-
-    # print("final_weights shape ", final_weights.shape)
-
-    # final_weights_reshaped = final_weights.view(2, 4, 10, 10)
+    accuracy2 = (total_correct / S) * 100
+    print(f'Accuracy 2: {accuracy2:.2f}%')
 
     # Reshape the weights for visualization
-    # final_weights_reshaped = final_weights.view(2, 2, 10, 10)
-
-    # Reshape the weights for visualization
-    final_weights_reshaped = final_weights.view(4, 2, 100)
+    # final_weights_reshaped = final_weights.view(4, 2, 100)
+    final_weights_reshaped = final_weights.view(8, 2, 100)
 
     # Create a 4x2 subplot grid
-    fig, axs = plt.subplots(4, 2)
+    # fig, axs = plt.subplots(4, 2)
+    fig, axs = plt.subplots(8, 2)
 
     # Plot the weights for each neuron
-    for neuron_index in range(4):
+    # for neuron_index in range(4):
+    for neuron_index in range(8):
         # Swap the indices to switch the places of the frames
         abs_weights1 = torch.abs(final_weights_reshaped[neuron_index, 1])  # Frame 2
         abs_weights2 = torch.abs(final_weights_reshaped[neuron_index, 0])  # Frame 1
@@ -314,7 +269,7 @@ if __name__ == '__main__':
     plt.show()
 
     plt.plot(loss_values, label='Training Loss')
-    plt.xlabel('Samples')
+    plt.xlabel('Iteration')
     plt.ylabel('Loss')
     plt.legend()
     plt.show()
@@ -322,12 +277,15 @@ if __name__ == '__main__':
     print("TESTING---------->")
     net.eval()
     R = 4
-    accumulated_potentials = torch.zeros(4, 13)
+    # accumulated_potentials = torch.zeros(4, 13)
+    accumulated_potentials = torch.zeros(8, 13)
     total_correctz = 0
-    # test_stimuli = ['up', 'down', 'left', 'right']
-    test_stimuli = ['right', 'up', 'left', 'down']
+    # test_stimuli = []
+    test_stimuli = ['up', 'down', 'left', 'right']
+    # test_stimuli = ['right', 'up', 'left', 'down']
     # membrane_potentials = {direction: [] for direction in test_stimuli}
-    membrane_potentials = {direction: torch.zeros(4, 13) for direction in test_stimuli}
+    # membrane_potentials = {direction: torch.zeros(4, 13) for direction in test_stimuli}
+    membrane_potentials = {direction: torch.zeros(8, 13) for direction in test_stimuli}
     with torch.no_grad():
         # for r in range(R):
         for d in test_stimuli:
@@ -365,26 +323,15 @@ if __name__ == '__main__':
             print("direction_choice ", direction_choice)
 
             # predicted_label = torch.argmax(accumulated_potentials, dim=0)
-            active_neuron = torch.argmax(membrane_potentials[d])
+            # active_neuron = torch.argmax(membrane_potentials[d])
+            active_neuron = torch.argmax(highest_values_tensor)
             # predicted_label = torch.argmax(accumulated_potentials, dim=1)
             print("active_neuron ", active_neuron)
-            if active_neuron < 13:  # up
-                active_neuron = torch.tensor([1, 0, 0, 0], dtype=torch.float32)
-            elif 13 <= active_neuron < 26:  # down
-                active_neuron = torch.tensor([0, 1, 0, 0], dtype=torch.float32)
-            elif 26 <= active_neuron < 39:  # left
-                active_neuron = torch.tensor([0, 0, 1, 0], dtype=torch.float32)
-            else:  # right
-                active_neuron = torch.tensor([0, 0, 0, 1], dtype=torch.float32)
-            print("active_neuron ", active_neuron)
+            if label[active_neuron] == 1:
+                print("correct!")
+                total_correctz += 1
             # print("overall_label ", overall_label)
             # import pdb;pdb.set_trace()
-
-            if torch.equal(active_neuron, label):
-                print("active_neuron ", active_neuron)
-                print("label ", label)
-                total_correctz += 1
-                print("total_correctz ", total_correctz)
 
             # Store the weights for later analysis
             # weight_history.append(net[1].weight.data.clone())
@@ -401,7 +348,7 @@ if __name__ == '__main__':
             # accumulated_potentials = torch.zeros(2, 13)
 
     accuracyz = 100 * total_correctz / R
-    print("AccuracyZ = {}".format(accuracyz))
+    print("AccuracyZ for testing = {}".format(accuracyz))
 
     # Plot the time course of the membrane potentials for each stimulus direction
     # fig, axs = plt.subplots(len(test_stimuli), 1, figsize=(10, 6 * len(test_stimuli)))
