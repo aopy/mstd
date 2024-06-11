@@ -1,0 +1,1 @@
+Computational neuroscience models based on spiking neural networks, learning with spike-timing-dependent plasticity and backpropagation to gain selectivity to directions and optic flow patterns (from artificial data and event camera recordings).
