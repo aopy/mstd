@@ -1,8 +1,8 @@
-# snn/stdp with dvs - 1 camera - no delay
+# snn/stdp with dvs - 1 camera
 # raw events
-# memory usage improvements
 # use center receptive field of 14x11 size
 # delay
+# dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
 
 import torch
 import torch.nn as nn
@@ -16,8 +16,8 @@ import hdf5plugin
 import h5py
 
 # Seed for reproducibility
-# random.seed(5)
-# torch.manual_seed(5)
+random.seed(8)
+torch.manual_seed(8)
 
 
 class EventDataset(Dataset):
@@ -29,8 +29,10 @@ class EventDataset(Dataset):
         self.max_events = max_events
         self.temporal_window = temporal_window
         self.delay = delay
+        self.events_cache = self.load_all_events()  # Cache all events during initialization
 
-    def load_events_in_chunks(self):
+    def load_all_events(self):
+        events = []
         with h5py.File(self.file_path, 'r') as f:
             if 'events' in f and all(key in f['events'] for key in ['x', 'y', 'p', 't']):
                 total_events = f['events']['x'].shape[0]
@@ -41,22 +43,27 @@ class EventDataset(Dataset):
                     y = f['events']['y'][start:end]
                     p = f['events']['p'][start:end]
                     t = f['events']['t'][start:end]
-                    yield np.column_stack((x, y, p, t))
+                    events.append(np.column_stack((x, y, p, t)))
             else:
                 raise ValueError("The required datasets ('x', 'y', 'p', 't') are not in the 'events' group.")
+        return np.concatenate(events, axis=0)
 
     def preprocess_events(self, events, center_x=640, center_y=360, rf_width=14, rf_height=11):
+        # Initialize empty frames for ON and OFF events
         on_frame = np.zeros((rf_height, rf_width), dtype=np.float32)
         off_frame = np.zeros((rf_height, rf_width), dtype=np.float32)
 
+        # Calculate the bounds of the receptive field around the center
         x_min = center_x - rf_width // 2
         x_max = center_x + rf_width // 2
         y_min = center_y - rf_height // 2
         y_max = center_y + rf_height // 2
 
+        # Clip events to be within the bounds of the receptive field
         events[:, 0] = np.clip(events[:, 0], x_min, x_max - 1)
         events[:, 1] = np.clip(events[:, 1], y_min, y_max - 1)
 
+        # Process events and populate ON and OFF frames
         for event in events:
             x, y, polarity, timestamp = int(event[0]) - x_min, int(event[1]) - y_min, int(event[2]), event[3]
             if polarity == 1:
@@ -67,8 +74,7 @@ class EventDataset(Dataset):
         return on_frame, off_frame
 
     def create_frames_generator(self):
-        events_gen = self.load_events_in_chunks()
-        current_events = next(events_gen)
+        current_events = self.events_cache
         timestamps = current_events[:, 3]
         min_time, max_time = timestamps.min(), timestamps.max()
         current_time = min_time
@@ -76,14 +82,6 @@ class EventDataset(Dataset):
         delayed_events = np.empty((0, 4))
 
         while True:
-            while (timestamps < current_time + self.temporal_window).any():
-                try:
-                    new_events = next(events_gen)
-                    current_events = np.concatenate((current_events, new_events), axis=0)
-                    timestamps = current_events[:, 3]
-                except StopIteration:
-                    break
-
             mask = (timestamps >= current_time) & (timestamps < current_time + self.temporal_window)
             delayed_mask = (timestamps >= current_time - self.delay) & (timestamps < current_time - self.delay + self.temporal_window)
 
@@ -221,15 +219,10 @@ def plot_weights(weights, input_shape=(720, 1280), num_channels=2, downsample_fa
 if __name__ == '__main__':
     # Network parameters
     N_out = 8
-    # S, batch_size, width, height = 1, 1, 180, 240
     S, batch_size, width, height = 1, 1, 1280, 720
     lr, w_min, w_max = 0.0008, 0.0, 0.3
-    th = 5.0
-    T = 20
 
     # Calculate the correct input size for the fully connected layer
-    # input_size = 2 * width * height
-    # input_shape = (2, 11, 14)  # Channels, Height, Width
     input_shape = (4, 11, 14)  # Channels, Height, Width
     net = SNN(input_shape)
     net.lif_neurons.enable_inhibition()
@@ -250,10 +243,11 @@ if __name__ == '__main__':
     # running-easy-events_right contains 2017187149 events
     # max_events = 1000000  # Set a small fraction of the recording to test
     max_events = 100000
-    temporal_window = 1e3  # 1 ms window for high temporal resolution
-    dataset = EventDataset(file_path, max_events=max_events, temporal_window=temporal_window)
+    temporal_window = 10e3  # 10 ms window for high temporal resolution
+    dataset = EventDataset(file_path, max_events=max_events, temporal_window=temporal_window, delay=20e3)
     # dataset = EventDataset(file_path, temporal_window=temporal_window)
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    # data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)  # Use multiple workers for parallel loading
     # for data in data_loader:
     #    print(data.shape)  # Should output torch.Size([1, 2, height, width])
 
@@ -266,20 +260,15 @@ if __name__ == '__main__':
         optimizer.zero_grad()
         frame_gen = dataset.create_frames_generator()  # Initialize the frame generator for each epoch
         for idx, combined_input in enumerate(frame_gen):
-            print("time step (1ms) ", idx)
-            print("combined_input) ", combined_input)
-            # x = 1 in combined_input
-            # y = 0 in combined_input
-            # print("1 in combined_input ", x)
-            # print("0 in combined_input ", y)
+            print("time step (10ms) ", idx)
+            # print("combined_input) ", combined_input)
             # print("Processing input with shape:", combined_input.shape)
             combined_input = torch.tensor(combined_input, dtype=torch.float32).unsqueeze(0)
-            # print("combined_input) ", combined_input)
+            # print("combined_input2) ", combined_input)
             output = net(combined_input)
             # print("output ", output)
             mp = net.lif_neurons.v
             # print("mps ", mp)
-
             learner.step(on_grad=True)
             optimizer.step()
             net.fc.weight.data.clamp_(w_min, w_max)
@@ -290,8 +279,6 @@ if __name__ == '__main__':
         net.reset()
         functional.reset_net(net)
 
-    # plot_weights(net.fc.weight.data, input_shape=(11, 14), num_channels=2, downsample_factor=1,
-    #             save_path="weights_final")
     plot_weights(net.fc.weight.data, input_shape=(11, 14), num_channels=4, downsample_factor=1,
                  save_path="weights_final")
 
