@@ -21,7 +21,8 @@ torch.manual_seed(8)
 
 
 class EventDataset(Dataset):
-    def __init__(self, file_path, height=720, width=1280, chunk_size=100000, max_events=None, temporal_window=1e3, delay=30e3):
+    def __init__(self, file_path, height=720, width=1280, chunk_size=100000, max_events=None, temporal_window=1e3,
+                 delay=30e3):
         self.file_path = file_path
         self.height = height
         self.width = width
@@ -29,52 +30,56 @@ class EventDataset(Dataset):
         self.max_events = max_events
         self.temporal_window = temporal_window
         self.delay = delay
-        self.events_cache = self.load_all_events()  # Cache all events during initialization
+        self.cached_events = None  # Cache to store events
 
-    def load_all_events(self):
-        events = []
-        with h5py.File(self.file_path, 'r') as f:
-            if 'events' in f and all(key in f['events'] for key in ['x', 'y', 'p', 't']):
-                total_events = f['events']['x'].shape[0]
-                total_to_load = min(total_events, self.max_events) if self.max_events else total_events
-                for start in range(0, total_to_load, self.chunk_size):
-                    end = min(start + self.chunk_size, total_to_load)
-                    x = f['events']['x'][start:end]
-                    y = f['events']['y'][start:end]
-                    p = f['events']['p'][start:end]
-                    t = f['events']['t'][start:end]
-                    events.append(np.column_stack((x, y, p, t)))
-            else:
-                raise ValueError("The required datasets ('x', 'y', 'p', 't') are not in the 'events' group.")
-        return np.concatenate(events, axis=0)
+    def load_events_in_chunks(self):
+        if self.cached_events is None:
+            print("Loading events from file...")
+            events_list = []
+            with h5py.File(self.file_path, 'r') as f:
+                if 'events' in f and all(key in f['events'] for key in ['x', 'y', 'p', 't']):
+                    total_events = f['events']['x'].shape[0]
+                    total_to_load = min(total_events, self.max_events) if self.max_events else total_events
+                    for start in range(0, total_to_load, self.chunk_size):
+                        end = min(start + self.chunk_size, total_to_load)
+                        x = f['events']['x'][start:end]
+                        y = f['events']['y'][start:end]
+                        p = f['events']['p'][start:end]
+                        t = f['events']['t'][start:end]
+                        events_list.append(np.column_stack((x, y, p, t)))
+            self.cached_events = np.concatenate(events_list, axis=0)
+        else:
+            print("Using cached events...")
+
+        yield self.cached_events
 
     def preprocess_events(self, events, center_x=640, center_y=360, rf_width=14, rf_height=11):
-        # Initialize empty frames for ON and OFF events
         on_frame = np.zeros((rf_height, rf_width), dtype=np.float32)
         off_frame = np.zeros((rf_height, rf_width), dtype=np.float32)
 
         # Calculate the bounds of the receptive field around the center
-        x_min = center_x - rf_width // 2
-        x_max = center_x + rf_width // 2
-        y_min = center_y - rf_height // 2
-        y_max = center_y + rf_height // 2
+        x_min = center_x - (rf_width // 2)  # 640 - 7 = 633
+        x_max = center_x + (rf_width // 2)  # 640 + 7 = 647 (exclusive)
+        y_min = center_y - (rf_height // 2)  # 360 - 5 = 355
+        y_max = center_y + (rf_height // 2) + 1  # 360 + 5 + 1 = 366 (exclusive)
 
-        # Clip events to be within the bounds of the receptive field
+        # Ensure events are within bounds
         events[:, 0] = np.clip(events[:, 0], x_min, x_max - 1)
         events[:, 1] = np.clip(events[:, 1], y_min, y_max - 1)
 
-        # Process events and populate ON and OFF frames
         for event in events:
             x, y, polarity, timestamp = int(event[0]) - x_min, int(event[1]) - y_min, int(event[2]), event[3]
-            if polarity == 1:
-                on_frame[y, x] = 1
-            else:
-                off_frame[y, x] = 1
+            if 0 <= x < rf_width and 0 <= y < rf_height:  # Ensure indices are within bounds
+                if polarity == 1:
+                    on_frame[y, x] = 1
+                else:
+                    off_frame[y, x] = 1
 
         return on_frame, off_frame
 
     def create_frames_generator(self):
-        current_events = self.events_cache
+        events_gen = self.load_events_in_chunks()
+        current_events = next(events_gen)
         timestamps = current_events[:, 3]
         min_time, max_time = timestamps.min(), timestamps.max()
         current_time = min_time
@@ -82,11 +87,21 @@ class EventDataset(Dataset):
         delayed_events = np.empty((0, 4))
 
         while True:
+            while (timestamps < current_time + self.temporal_window).any():
+                try:
+                    new_events = next(events_gen)
+                    current_events = np.concatenate((current_events, new_events), axis=0)
+                    timestamps = current_events[:, 3]
+                except StopIteration:
+                    break
+
             mask = (timestamps >= current_time) & (timestamps < current_time + self.temporal_window)
-            delayed_mask = (timestamps >= current_time - self.delay) & (timestamps < current_time - self.delay + self.temporal_window)
+            delayed_mask = (timestamps >= current_time - self.delay) & (
+                        timestamps < current_time - self.delay + self.temporal_window)
 
             frame_events = current_events[mask]
-            delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
+            delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (
+                        delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
 
             current_frame_on, current_frame_off = self.preprocess_events(frame_events)
             delayed_frame_on, delayed_frame_off = self.preprocess_events(delayed_frame_events)
