@@ -58,7 +58,7 @@ class EventDataset(Dataset):
 
         # Calculate the bounds of the receptive field around the center
         x_min = center_x - (rf_width // 2)  # 640 - 7 = 633
-        x_max = center_x + (rf_width // 2) + 1  # 640 + 7 + 1 = 648
+        x_max = center_x + (rf_width // 2)  # 640 + 7 = 648
         y_min = center_y - (rf_height // 2)  # 360 - 5 = 355
         y_max = center_y + (rf_height // 2) + 1  # 360 + 5 + 1 = 366
 
