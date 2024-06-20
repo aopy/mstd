@@ -15,6 +15,10 @@ import numpy as np
 import hdf5plugin
 import h5py
 
+# Check if GPU is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 # Seed for reproducibility
 random.seed(8)
 torch.manual_seed(8)
@@ -107,15 +111,18 @@ class EventDataset(Dataset):
                     break
 
             mask = (timestamps >= current_time) & (timestamps < current_time + self.temporal_window)
-            delayed_mask = (timestamps >= current_time - self.delay) & (timestamps < current_time - self.delay + self.temporal_window)
+            delayed_mask = (timestamps >= current_time - self.delay) & (
+                        timestamps < current_time - self.delay + self.temporal_window)
 
             frame_events = current_events[mask]
-            delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
+            delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (
+                        delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
 
             current_frame_on, current_frame_off = self.preprocess_events(frame_events, debug=False)
             delayed_frame_on, delayed_frame_off = self.preprocess_events(delayed_frame_events, debug=False)
 
             frame = np.stack([current_frame_on, current_frame_off, delayed_frame_on, delayed_frame_off], axis=0)
+            frame = torch.tensor(frame, dtype=torch.float32).to(device)  # Move frame to the specified device
             yield frame
 
             delayed_events = np.concatenate((delayed_events, current_events[mask]), axis=0)
@@ -186,12 +193,13 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
 
 
 class SNN(MemoryModule):
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, device):
         super(SNN, self).__init__()
         self.flatten = nn.Flatten()
         input_size = input_shape[0] * input_shape[1] * input_shape[2]
         self.fc = nn.Linear(input_size, 4, bias=False)
         self.lif_neurons = LateralInhibitionLIFNode(tau=2.0, v_threshold=5.0)
+        self.to(device)
 
     def forward(self, x):
         x = self.flatten(x)
@@ -248,11 +256,11 @@ if __name__ == '__main__':
 
     # Calculate the correct input size for the fully connected layer
     input_shape = (4, 11, 14)  # Channels, Height, Width
-    net = SNN(input_shape)
+    net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
     # net.lif_neurons.disable_inhibition()
     # nn.init.uniform_(net.fc.weight.data, 0.0001, 0.01)
-    nn.init.uniform_(net.fc.weight.data, 0.0001, 0.3)
+    nn.init.uniform_(net.fc.weight.data, 0.1, 0.3)
     # nn.init.constant_(net.fc.weight.data, 0.3)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
@@ -276,6 +284,7 @@ if __name__ == '__main__':
     data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)  # Use multiple workers for parallel loading
     # for data in data_loader:
     #    print(data.shape)  # Should output torch.Size([1, 2, height, width])
+    frame_gen = dataset.create_frames_generator()
 
     # Training loop
     print("TRAINING")
@@ -284,13 +293,12 @@ if __name__ == '__main__':
         # if s % 100 == 0:
         #    print(s)
         optimizer.zero_grad()
-        frame_gen = dataset.create_frames_generator()  # Initialize the frame generator for each epoch
         for idx, combined_input in enumerate(frame_gen):
             print("time step (10ms) ", idx)
             # print("combined_input) ", combined_input)
             # print("Processing input with shape:", combined_input.shape)
-            combined_input = torch.tensor(combined_input, dtype=torch.float32).unsqueeze(0)
             # print("combined_input2) ", combined_input)
+            combined_input = combined_input.clone().detach().unsqueeze(0).to(device)
             output = net(combined_input)
             # print("output ", output)
             mp = net.lif_neurons.v
