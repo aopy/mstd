@@ -18,9 +18,6 @@ import json
 import hdf5plugin
 import h5py
 
-# Check if GPU is available
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
 # Seed for reproducibility
 random.seed(8)
@@ -29,7 +26,7 @@ torch.manual_seed(8)
 
 class EventDataset(Dataset):
     def __init__(self, file_path, height=720, width=1280, camera_index=3, chunk_size=100000,
-                 max_events=None, temporal_window=1e3, delay=30e3):
+                 max_events=None, temporal_window=1e3, delay=30e3, device='cpu'):
         self.file_path = file_path
         self.height = height
         self.width = width
@@ -38,6 +35,7 @@ class EventDataset(Dataset):
         self.temporal_window = temporal_window
         self.delay = delay
         self.cached_events = None  # Cache to store events
+        self.device = device
 
         # Calculate aspect ratio based on FoV
         fov_horizontal = 90  # degrees
@@ -151,7 +149,7 @@ class EventDataset(Dataset):
             delayed_frame_on, delayed_frame_off = self.preprocess_events(delayed_frame_events)
 
             frame = np.stack([current_frame_on, current_frame_off, delayed_frame_on, delayed_frame_off], axis=0)
-            frame = torch.tensor(frame, dtype=torch.float32).to(device)  # Move frame to the specified device
+            frame = torch.tensor(frame, dtype=torch.float32).to(self.device)  # Move frame to the specified device
             yield frame
 
             delayed_events = np.concatenate((delayed_events, current_events[mask]), axis=0)
@@ -285,6 +283,8 @@ if __name__ == '__main__':
 
     # Calculate the correct input size for the fully connected layer
     input_shape = (4, 11, 12)  # Channels, Height, Width
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(device)
     net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
     # net.lif_neurons.disable_inhibition()
@@ -307,7 +307,7 @@ if __name__ == '__main__':
     # max_events = 1000000  # Set a small fraction of the recording to test
     max_events = 10000000
     temporal_window = 10e3  # 10 ms window for high temporal resolution
-    dataset = EventDataset(file_path, max_events=max_events, temporal_window=temporal_window, delay=20e3)
+    dataset = EventDataset(file_path, max_events=max_events, temporal_window=temporal_window, delay=20e3, device=device)
     # dataset = EventDataset(file_path, temporal_window=temporal_window)
     # data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)  # multiple workers/parallel loading
@@ -324,7 +324,7 @@ if __name__ == '__main__':
             print("time step (10ms) ", idx)
             # print("combined_input) ", combined_input)
             # print("Processing input with shape:", combined_input.shape)
-            combined_input = combined_input.clone().detach().unsqueeze(0).to(device)
+            combined_input = torch.tensor(combined_input, dtype=torch.float32).to(device).unsqueeze(0)
             output = net(combined_input)
             # print("output ", output)
             mp = net.lif_neurons.v
