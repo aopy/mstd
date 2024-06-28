@@ -265,7 +265,7 @@ def plot_weights(weights, input_shape=(720, 1280), num_channels=2, downsample_fa
             norm_weights = (neuron_weights - neuron_weights.min()) / (neuron_weights.max() - neuron_weights.min())
 
             ax = axs[neuron_idx, channel_idx] if num_neurons > 1 else axs[channel_idx]
-            im = ax.imshow(norm_weights.detach().numpy(), cmap='viridis', origin='upper')
+            im = ax.imshow(norm_weights.cpu().detach().numpy(), cmap='viridis', origin='upper')  # Move to CPU before converting to numpy
             ax.set_title(f'Neuron {neuron_idx + 1}, Channel {channel_idx + 1}')
             ax.axis('off')
             plt.colorbar(im, ax=ax)
