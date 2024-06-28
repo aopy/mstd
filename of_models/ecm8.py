@@ -177,11 +177,11 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
     def forward(self, x):
         # Ensure self.v is a tensor
         if not isinstance(self.v, torch.Tensor):
-            self.v = torch.zeros(x.size(0), x.size(1))
+            self.v = torch.zeros(x.size(0), x.size(1)).to(x.device)
 
         # Initialize previous_v if it's the first call and self.v is already a tensor
         if self.previous_v is None or self.previous_v.shape != self.v.shape:
-            self.previous_v = torch.zeros_like(self.v)
+            self.previous_v = torch.zeros_like(self.v).to(x.device)
 
         current_spikes = super().forward(x)  # Get current spikes from LIF dynamics
 
