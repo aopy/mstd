@@ -324,7 +324,7 @@ if __name__ == '__main__':
             print("time step (10ms) ", idx)
             # print("combined_input) ", combined_input)
             # print("Processing input with shape:", combined_input.shape)
-            combined_input = torch.tensor(combined_input, dtype=torch.float32).to(device).unsqueeze(0)
+            combined_input = combined_input.clone().detach().to(device).unsqueeze(0)
             output = net(combined_input)
             # print("output ", output)
             mp = net.lif_neurons.v
