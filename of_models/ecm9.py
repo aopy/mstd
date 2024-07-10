@@ -327,12 +327,11 @@ if __name__ == '__main__':
         temporal_window=temporal_window,
         delay=20e3,
         start_time=25e6,  # 25 seconds in microseconds
-        end_time=26e6,     # 31 seconds in microseconds
+        end_time=26e6,     # 26 seconds in microseconds
         device=device)
     # dataset = EventDataset(file_path, temporal_window=temporal_window)
     # data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)  # multiple workers/parallel loading
-    frame_gen = dataset.create_frames_generator()
 
     # Training loop
     print("TRAINING")
@@ -341,6 +340,7 @@ if __name__ == '__main__':
         # if s % 100 == 0:
         #    print(s)
         optimizer.zero_grad()
+        frame_gen = dataset.create_frames_generator()
         for idx, combined_input in enumerate(frame_gen):
             print("time step (10ms) ", idx)
             # print("combined_input) ", combined_input)

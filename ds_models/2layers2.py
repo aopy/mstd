@@ -1,3 +1,5 @@
+# 2 directions/ 2 neurons, training with backpropagation
+
 import torch
 import torch.nn as nn
 from spikingjelly.activation_based import neuron, layer, learning, functional
