@@ -266,9 +266,8 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def plot_weights(weights, input_shape=(720, 1280), num_channels=2, downsample_factor=10, save_path="weights"):
+def plot_weights(weights, input_shape=(33, 33), num_channels=2, save_path="weights"):
     num_neurons = weights.shape[0]
-    downsampled_shape = (input_shape[0] // downsample_factor, input_shape[1] // downsample_factor)
     num_features_per_channel = input_shape[0] * input_shape[1]
 
     fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 5, num_neurons * 5))
@@ -278,15 +277,9 @@ def plot_weights(weights, input_shape=(720, 1280), num_channels=2, downsample_fa
             end_idx = start_idx + num_features_per_channel
             neuron_weights = weights[neuron_idx, start_idx:end_idx].view(input_shape)
 
-            # Downsample the weights for better visualization
-            neuron_weights = neuron_weights.reshape(downsampled_shape[0], downsample_factor, downsampled_shape[1],
-                                                    downsample_factor).mean(axis=(1, 3))
-
-            # Normalize the weights for better visualization
-            norm_weights = (neuron_weights - neuron_weights.min()) / (neuron_weights.max() - neuron_weights.min())
-
             ax = axs[neuron_idx, channel_idx] if num_neurons > 1 else axs[channel_idx]
-            im = ax.imshow(norm_weights.cpu().detach().numpy(), cmap='viridis', origin='upper')  # Move to CPU before converting to numpy
+            # Move to CPU before converting to numpy
+            im = ax.imshow(neuron_weights.cpu().detach().numpy(), cmap='viridis', origin='upper')
             ax.set_title(f'Neuron {neuron_idx + 1}, Channel {channel_idx + 1}')
             ax.axis('off')
             plt.colorbar(im, ax=ax)
@@ -366,7 +359,7 @@ if __name__ == '__main__':
         net.reset()
         functional.reset_net(net)
 
-    plot_weights(net.fc.weight.data, input_shape=(3*11, 3*11), num_channels=4, downsample_factor=1,
+    plot_weights(net.fc.weight.data, input_shape=(3 * 11, 3 * 11), num_channels=4,
                  save_path="weights_final33x33")
 
     # net.eval()
