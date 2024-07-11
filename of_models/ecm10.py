@@ -15,7 +15,6 @@ from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import math
-import json
 import hdf5plugin
 import h5py
 
@@ -361,7 +360,7 @@ if __name__ == '__main__':
             # print("Processing input with shape:", combined_input.shape)
             combined_input = combined_input.clone().detach().to(device).unsqueeze(0)
             output = net(combined_input)
-            # print("output ", output)
+            print("output ", output)
             mp = net.lif_neurons.v
             # print("mps ", mp)
             learner.step(on_grad=True)
