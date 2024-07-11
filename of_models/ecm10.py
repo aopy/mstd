@@ -266,12 +266,6 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def load_event_camera_data(loader):
-    for data in loader:
-        # print("Loaded batch of data with shape:", data.shape)
-        yield data
-
-
 def plot_weights(weights, input_shape=(720, 1280), num_channels=2, downsample_factor=10, save_path="weights"):
     num_neurons = weights.shape[0]
     downsampled_shape = (input_shape[0] // downsample_factor, input_shape[1] // downsample_factor)
@@ -316,8 +310,7 @@ if __name__ == '__main__':
     net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
     # net.lif_neurons.disable_inhibition()
-    # nn.init.uniform_(net.fc.weight.data, 0.0001, 0.01)
-    nn.init.uniform_(net.fc.weight.data, 0.1, 0.3)
+    nn.init.uniform_(net.fc.weight.data, 0.001, 0.1)
     # nn.init.constant_(net.fc.weight.data, 0.3)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
@@ -360,7 +353,7 @@ if __name__ == '__main__':
             # print("Processing input with shape:", combined_input.shape)
             combined_input = combined_input.clone().detach().to(device).unsqueeze(0)
             output = net(combined_input)
-            print("output ", output)
+            # print("output ", output)
             mp = net.lif_neurons.v
             # print("mps ", mp)
             learner.step(on_grad=True)
