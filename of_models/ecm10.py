@@ -42,7 +42,7 @@ class EventDataset(Dataset):
         # Calculate aspect ratio based on FoV
         fov_horizontal = 90  # degrees
         fov_vertical = 65  # degrees
-        self.aspect_ratio = math.tan(math.radians(fov_horizontal / 2)) / math.tan(math.radians(fov_vertical / 2))
+        self.aspect_ratio = fov_horizontal / fov_vertical
 
         # Determine new dimensions based on aspect ratio
         self.new_width = int(self.height * self.aspect_ratio)
@@ -319,11 +319,10 @@ if __name__ == '__main__':
     # file_path = 'data/skate-easy-events_right.h5'
     # running-easy-events_right contains 2017187149 events
     # max_events = 1000000  # Set a small fraction of the recording to test
-    temporal_window = 10e3  # 10 ms window for high temporal resolution
     dataset = EventDataset(
         file_path,
         max_events=None,
-        temporal_window=temporal_window,
+        temporal_window=10e3,  # 10 ms window for temporal resolution
         delay=20e3,
         start_time=25e6,  # 25 seconds in microseconds
         end_time=26e6,     # 26 seconds in microseconds
@@ -359,7 +358,7 @@ if __name__ == '__main__':
         net.reset()
         functional.reset_net(net)
 
-    plot_weights(net.fc.weight.data, input_shape=(3 * 11, 3 * 11), num_channels=4,
+    plot_weights(net.fc.weight.data, input_shape=(3*11, 3*11), num_channels=4,
                  save_path="weights_final33x33")
 
     # net.eval()
