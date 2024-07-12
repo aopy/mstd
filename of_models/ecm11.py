@@ -1,6 +1,7 @@
 # snn/stdp with dvs - 1 camera
 # raw events
 # use center receptive field of 11x11 size
+# grid of 9x9 receptive fields
 # delay
 # dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
 # adjusting event coordinates to correct for angular resolution differences
@@ -40,7 +41,7 @@ class EventDataset(Dataset):
         # Calculate aspect ratio based on FoV
         fov_horizontal = 90  # degrees
         fov_vertical = 65  # degrees
-        self.aspect_ratio = fov_horizontal / fov_vertical
+        self.aspect_ratio = fov_horizontal / fov_vertical  # 90 degrees / 65 degrees
 
         # Determine new dimensions based on aspect ratio
         self.new_width = round(self.height * self.aspect_ratio)
@@ -60,6 +61,9 @@ class EventDataset(Dataset):
         # Center coordinates for the receptive field
         self.center_x = self.new_width // 2
         self.center_y = self.new_height // 2
+
+        # Generate the offsets for a 9x9 grid of receptive fields
+        self.rf_offsets = [(dx - 4, dy - 4) for dx in range(9) for dy in range(9)]
 
     def load_events_in_chunks(self):
         if self.cached_events is None:
@@ -97,8 +101,8 @@ class EventDataset(Dataset):
         yield self.cached_events
 
     def preprocess_events(self, events):
-        on_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
-        off_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
+        combined_on_frame = np.zeros((self.rf_size * 9, self.rf_size * 9), dtype=np.float32)
+        combined_off_frame = np.zeros((self.rf_size * 9, self.rf_size * 9), dtype=np.float32)
 
         # Calculate scaling factors
         scale_x = self.new_width / self.width
@@ -112,24 +116,30 @@ class EventDataset(Dataset):
         events[:, 0] = np.clip(events[:, 0], 0, self.new_width - 1)
         events[:, 1] = np.clip(events[:, 1], 0, self.new_height - 1)
 
-        # Calculate the bounds of the receptive field around the center
-        x_min = self.center_x - (self.rf_size // 2)
-        x_max = self.center_x + (self.rf_size // 2) + 1
-        y_min = self.center_y - (self.rf_size // 2)
-        y_max = self.center_y + (self.rf_size // 2) + 1
+        # Precompute indices
+        rf_indices = []
+        for dx, dy in self.rf_offsets:
+            x_min = self.center_x - (self.rf_size // 2) + dx * self.rf_size
+            x_max = x_min + self.rf_size
+            y_min = self.center_y - (self.rf_size // 2) + dy * self.rf_size
+            y_max = y_min + self.rf_size
+            rf_indices.append((x_min, x_max, y_min, y_max))
 
         for event in events:
             x, y, polarity, timestamp = int(event[0]), int(event[1]), int(event[2]), event[3]
-            if x_min <= x < x_max and y_min <= y < y_max:
-                x_rf = x - x_min
-                y_rf = y - y_min
-                if 0 <= x_rf < self.rf_size and 0 <= y_rf < self.rf_size:  # Ensure indices are within bounds
-                    if polarity == 1:
-                        on_frame[y_rf, x_rf] = 1
-                    else:
-                        off_frame[y_rf, x_rf] = 1
+            for i, (x_min, x_max, y_min, y_max) in enumerate(rf_indices):
+                if x_min <= x < x_max and y_min <= y < y_max:
+                    x_rf = x - x_min
+                    y_rf = y - y_min
+                    if 0 <= x_rf < self.rf_size and 0 <= y_rf < self.rf_size:  # Ensure indices are within bounds
+                        row = i // 9
+                        col = i % 9
+                        if polarity == 1:
+                            combined_on_frame[row * self.rf_size + y_rf, col * self.rf_size + x_rf] = 1
+                        else:
+                            combined_off_frame[row * self.rf_size + y_rf, col * self.rf_size + x_rf] = 1
 
-        return on_frame, off_frame
+        return combined_on_frame, combined_off_frame
 
     def create_frames_generator(self):
         events_gen = self.load_events_in_chunks()
@@ -251,15 +261,8 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def load_event_camera_data(loader):
-    for data in loader:
-        # print("Loaded batch of data with shape:", data.shape)
-        yield data
-
-
-def plot_weights(weights, input_shape=(720, 1280), num_channels=2, downsample_factor=10, save_path="weights"):
+def plot_weights(weights, input_shape=(33, 33), num_channels=2, save_path="weights"):
     num_neurons = weights.shape[0]
-    downsampled_shape = (input_shape[0] // downsample_factor, input_shape[1] // downsample_factor)
     num_features_per_channel = input_shape[0] * input_shape[1]
 
     fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 5, num_neurons * 5))
@@ -269,15 +272,9 @@ def plot_weights(weights, input_shape=(720, 1280), num_channels=2, downsample_fa
             end_idx = start_idx + num_features_per_channel
             neuron_weights = weights[neuron_idx, start_idx:end_idx].view(input_shape)
 
-            # Downsample the weights for better visualization
-            neuron_weights = neuron_weights.reshape(downsampled_shape[0], downsample_factor, downsampled_shape[1],
-                                                    downsample_factor).mean(axis=(1, 3))
-
-            # Normalize the weights for better visualization
-            norm_weights = (neuron_weights - neuron_weights.min()) / (neuron_weights.max() - neuron_weights.min())
-
             ax = axs[neuron_idx, channel_idx] if num_neurons > 1 else axs[channel_idx]
-            im = ax.imshow(norm_weights.cpu().detach().numpy(), cmap='viridis', origin='upper')  # Move to CPU before converting to numpy
+            # Move to CPU before converting to numpy
+            im = ax.imshow(neuron_weights.cpu().detach().numpy(), cmap='viridis', origin='upper')
             ax.set_title(f'Neuron {neuron_idx + 1}, Channel {channel_idx + 1}')
             ax.axis('off')
             plt.colorbar(im, ax=ax)
@@ -294,14 +291,14 @@ if __name__ == '__main__':
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
     # Calculate the correct input size for the fully connected layer
-    input_shape = (4, 11, 11)  # Channels, Height, Width
+    # input_shape = (4, 11, 11)  # Channels, Height, Width
+    input_shape = (4, 9*11, 9*11)  # Channels, Height, Width
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
     net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
     # net.lif_neurons.disable_inhibition()
-    # nn.init.uniform_(net.fc.weight.data, 0.0001, 0.01)
-    nn.init.uniform_(net.fc.weight.data, 0.1, 0.3)
+    nn.init.uniform_(net.fc.weight.data, 0.001, 0.1)
     # nn.init.constant_(net.fc.weight.data, 0.3)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
@@ -317,12 +314,10 @@ if __name__ == '__main__':
     # file_path = 'data/skate-easy-events_right.h5'
     # running-easy-events_right contains 2017187149 events
     # max_events = 1000000  # Set a small fraction of the recording to test
-    max_events = 100000
-    temporal_window = 10e3  # 10 ms window for high temporal resolution
     dataset = EventDataset(
         file_path,
         max_events=None,
-        temporal_window=temporal_window,
+        temporal_window=10e3,  # 10 ms window for temporal resolution
         delay=20e3,
         start_time=25e6,  # 25 seconds in microseconds
         end_time=26e6,     # 26 seconds in microseconds
@@ -358,8 +353,8 @@ if __name__ == '__main__':
         net.reset()
         functional.reset_net(net)
 
-    plot_weights(net.fc.weight.data, input_shape=(11, 11), num_channels=4, downsample_factor=1,
-                 save_path="weights_final")
+    plot_weights(net.fc.weight.data, input_shape=(9*11, 9*11), num_channels=4,
+                 save_path="weights_final99x99")
 
     # net.eval()
     # net.lif_neurons.disable_inhibition()

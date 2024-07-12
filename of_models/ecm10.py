@@ -14,7 +14,6 @@ import random
 from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import math
 import hdf5plugin
 import h5py
 
@@ -45,7 +44,7 @@ class EventDataset(Dataset):
         self.aspect_ratio = fov_horizontal / fov_vertical
 
         # Determine new dimensions based on aspect ratio
-        self.new_width = int(self.height * self.aspect_ratio)
+        self.new_width = round(self.height * self.aspect_ratio)
         self.new_height = self.height
 
         print(f"New dimensions of main frame: width {self.new_width}, height {self.new_height}")
