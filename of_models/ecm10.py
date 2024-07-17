@@ -1,8 +1,7 @@
 # snn/stdp with dvs - 1 camera
-# raw events
 # use center receptive field of 11x11 size
-# grid of 3x3 receptive fields
-# delay
+# 9 receptive fields in a 3x3 grid processed in a separate batch,
+# 4 channels: ON OFF, ON OFF with delay
 # dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
 # adjusting event coordinates to correct for angular resolution differences
 
@@ -105,8 +104,8 @@ class EventDataset(Dataset):
         yield self.cached_events
 
     def preprocess_events(self, events):
-        combined_on_frame = np.zeros((self.rf_size * 3, self.rf_size * 3), dtype=np.float32)
-        combined_off_frame = np.zeros((self.rf_size * 3, self.rf_size * 3), dtype=np.float32)
+        combined_on_frames = []
+        combined_off_frames = []
 
         # Calculate scaling factors
         scale_x = self.new_width / self.width
@@ -129,21 +128,24 @@ class EventDataset(Dataset):
             y_max = y_min + self.rf_size
             rf_indices.append((x_min, x_max, y_min, y_max))
 
-        for event in events:
-            x, y, polarity, timestamp = int(event[0]), int(event[1]), int(event[2]), event[3]
-            for i, (x_min, x_max, y_min, y_max) in enumerate(rf_indices):
+        for i, (x_min, x_max, y_min, y_max) in enumerate(rf_indices):
+            on_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
+            off_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
+
+            for event in events:
+                x, y, polarity, timestamp = int(event[0]), int(event[1]), int(event[2]), event[3]
                 if x_min <= x < x_max and y_min <= y < y_max:
                     x_rf = x - x_min
                     y_rf = y - y_min
-                    if 0 <= x_rf < self.rf_size and 0 <= y_rf < self.rf_size:  # Ensure indices are within bounds
-                        row = i // 3
-                        col = i % 3
-                        if polarity == 1:
-                            combined_on_frame[row * self.rf_size + y_rf, col * self.rf_size + x_rf] = 1
-                        else:
-                            combined_off_frame[row * self.rf_size + y_rf, col * self.rf_size + x_rf] = 1
+                    if polarity == 1:
+                        on_frame[y_rf, x_rf] = 1
+                    else:
+                        off_frame[y_rf, x_rf] = 1
 
-        return combined_on_frame, combined_off_frame
+            combined_on_frames.append(on_frame)
+            combined_off_frames.append(off_frame)
+
+        return np.array(combined_on_frames), np.array(combined_off_frames)
 
     def create_frames_generator(self):
         events_gen = self.load_events_in_chunks()
@@ -171,12 +173,12 @@ class EventDataset(Dataset):
             delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (
                     delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
 
-            current_frame_on, current_frame_off = self.preprocess_events(frame_events)
-            delayed_frame_on, delayed_frame_off = self.preprocess_events(delayed_frame_events)
+            current_frames_on, current_frames_off = self.preprocess_events(frame_events)
+            delayed_frames_on, delayed_frames_off = self.preprocess_events(delayed_frame_events)
 
-            frame = np.stack([current_frame_on, current_frame_off, delayed_frame_on, delayed_frame_off], axis=0)
-            frame = torch.tensor(frame, dtype=torch.float32).to(self.device)  # Move frame to the specified device
-            yield frame
+            frames = np.stack([current_frames_on, current_frames_off, delayed_frames_on, delayed_frames_off], axis=1)
+            frames = torch.tensor(frames, dtype=torch.float32).to(self.device)  # Move frames to the specified device
+            yield frames
 
             delayed_events = np.concatenate((delayed_events, current_events[mask]), axis=0)
             delayed_events = delayed_events[delayed_events[:, 3] >= current_time - self.delay]
@@ -201,6 +203,8 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
         self.previous_v = None
 
     def forward(self, x):
+        batch_size = x.size(0)
+
         # Ensure self.v is a tensor
         if not isinstance(self.v, torch.Tensor):
             self.v = torch.zeros(x.size(0), x.size(1)).to(x.device)
@@ -211,27 +215,27 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
 
         current_spikes = super().forward(x)  # Get current spikes from LIF dynamics
 
-        if torch.any(current_spikes > 0):
-            spiked_neurons = torch.where(current_spikes > 0)[1]
-            if len(spiked_neurons) > 1:
-                max_potentials = self.previous_v[0, spiked_neurons]
-                max_potential_indices = (max_potentials == torch.max(max_potentials)).nonzero(as_tuple=True)[0]
-                if len(max_potential_indices) > 1:
-                    self.winner_idx = spiked_neurons[
-                        max_potential_indices[torch.randint(len(max_potential_indices), (1,))]].item()
+        for b in range(batch_size):
+            if torch.any(current_spikes[b] > 0):
+                spiked_neurons = torch.where(current_spikes[b] > 0)[0]
+                if len(spiked_neurons) > 1:
+                    max_potentials = self.previous_v[b, spiked_neurons]
+                    max_potential_indices = (max_potentials == torch.max(max_potentials)).nonzero(as_tuple=True)[0]
+                    if len(max_potential_indices) > 1:
+                        winner_idx = spiked_neurons[
+                            max_potential_indices[torch.randint(len(max_potential_indices), (1,))]].item()
+                    else:
+                        winner_idx = spiked_neurons[max_potential_indices[0]].item()
                 else:
-                    self.winner_idx = spiked_neurons[max_potential_indices[0]].item()
-            else:
-                self.winner_idx = spiked_neurons[0].item()
+                    winner_idx = spiked_neurons[0].item()
 
-            self.inhibited_neurons_mask = torch.ones_like(current_spikes, dtype=torch.bool)
-            self.inhibited_neurons_mask[0, self.winner_idx] = False
-            self.v[self.inhibited_neurons_mask] = self.inhibition_strength
+                inhibited_neurons_mask = torch.ones_like(current_spikes[b], dtype=torch.bool)
+                inhibited_neurons_mask[winner_idx] = False
+                self.v[b, inhibited_neurons_mask] = self.inhibition_strength
 
-        output = current_spikes
         self.previous_v = self.v.clone()
 
-        return output
+        return current_spikes
 
     def reset(self):
         super().reset()
@@ -244,13 +248,12 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
     def disable_inhibition(self):
         self.inhibition_enabled = False
 
-
 class SNN(MemoryModule):
     def __init__(self, input_shape, device):
         super(SNN, self).__init__()
         self.flatten = nn.Flatten()
-        input_size = input_shape[0] * input_shape[1] * input_shape[2]
-        self.fc = nn.Linear(input_size, 4, bias=False)
+        input_size = input_shape[1] * input_shape[2] * input_shape[3]  # Correct input size calculation
+        self.fc = nn.Linear(input_size, 4, bias=False)  # Ensure the input size matches here
         self.lif_neurons = LateralInhibitionLIFNode(tau=2.0, v_threshold=5.0)
         self.to(device)
 
@@ -265,7 +268,7 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def plot_weights(weights, input_shape=(33, 33), num_channels=2, save_path="weights"):
+def plot_weights(weights, input_shape=(11, 11), num_channels=4, save_path="weights"):
     num_neurons = weights.shape[0]
     num_features_per_channel = input_shape[0] * input_shape[1]
 
@@ -291,24 +294,22 @@ def plot_weights(weights, input_shape=(33, 33), num_channels=2, save_path="weigh
 if __name__ == '__main__':
     # Network parameters
     N_out = 8
-    S, batch_size, width, height = 1, 1, 1280, 720
+    S, batch_size, width, height = 1, 9, 1280, 720
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
     # Calculate the correct input size for the fully connected layer
-    # input_shape = (4, 11, 11)  # Channels, Height, Width
-    input_shape = (4, 3*11, 3*11)  # Channels, Height, Width
+    input_shape = (9, 4, 11, 11)  # Number of receptive fields, Channels, Height, Width
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
     net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
-    # net.lif_neurons.disable_inhibition()
     nn.init.uniform_(net.fc.weight.data, 0.001, 0.1)
-    # nn.init.constant_(net.fc.weight.data, 0.3)
+    # nn.init.constant_(net.fc.weight.data, 1.0)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
     learner = learning.STDPLearner(
-        step_mode='s', synapse=net.fc, sn=net.lif_neurons,  # synapse=net[1], sn=net[2],
-        tau_pre=5.0, tau_post=5.0,  # one neuron spikes twice
+        step_mode='s', synapse=net.fc, sn=net.lif_neurons,
+        tau_pre=5.0, tau_post=5.0,
         f_pre=lambda x: torch.clamp(x, 0.0, 0.3), f_post=lambda x: torch.clamp(x, 0.0, 0.25),
     )
 
@@ -321,28 +322,23 @@ if __name__ == '__main__':
     dataset = EventDataset(
         file_path,
         max_events=None,
-        temporal_window=10e3,  # 10 ms window for temporal resolution
+        temporal_window=10e3,
         delay=20e3,
-        start_time=25e6,  # 25 seconds in microseconds
-        end_time=26e6,     # 26 seconds in microseconds
+        start_time=25e6,
+        end_time=26e6,
         device=device)
-    # dataset = EventDataset(file_path, temporal_window=temporal_window)
-    # data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)  # multiple workers/parallel loading
+    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)
 
     # Training loop
     print("TRAINING")
     for s in range(1):
         print(s)
-        # if s % 100 == 0:
-        #    print(s)
         optimizer.zero_grad()
         frame_gen = dataset.create_frames_generator()
         for idx, combined_input in enumerate(frame_gen):
             print("time step (10ms) ", idx)
-            # print("combined_input) ", combined_input)
-            # print("Processing input with shape:", combined_input.shape)
-            combined_input = combined_input.clone().detach().to(device).unsqueeze(0)
+            combined_input = combined_input.to(device)
+            # print(combined_input)
             output = net(combined_input)
             # print("output ", output)
             mp = net.lif_neurons.v
@@ -357,8 +353,7 @@ if __name__ == '__main__':
         net.reset()
         functional.reset_net(net)
 
-    plot_weights(net.fc.weight.data, input_shape=(3*11, 3*11), num_channels=4,
-                 save_path="weights_final33x33")
+    plot_weights(net.fc.weight.data, input_shape=(11, 11), num_channels=4, save_path="weights_final9x11x11")
 
     # net.eval()
     # net.lif_neurons.disable_inhibition()
