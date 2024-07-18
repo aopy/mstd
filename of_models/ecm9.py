@@ -1,9 +1,8 @@
-# snn/stdp with dvs - 1 camera
-# raw events
-# use center receptive field of 11x11 size
-# delay
-# dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
-# adjusting event coordinates to correct for angular resolution differences
+# SNN/STDP with DVS (1 camera)
+# Use center receptive field of 11x11 size
+# 4 channels: ON+OFF, ON+OFF with delay
+# Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
+# Adjusting event coordinates to correct for angular resolution differences
 
 import torch
 import torch.nn as nn
@@ -251,12 +250,6 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def load_event_camera_data(loader):
-    for data in loader:
-        # print("Loaded batch of data with shape:", data.shape)
-        yield data
-
-
 def plot_weights(weights, input_shape=(11, 11), num_channels=2, save_path="weights"):
     num_neurons = weights.shape[0]
     num_features_per_channel = input_shape[0] * input_shape[1]
@@ -333,9 +326,9 @@ if __name__ == '__main__':
         frame_gen = dataset.create_frames_generator()
         for idx, combined_input in enumerate(frame_gen):
             print("time step (10ms) ", idx)
-            # print("combined_input) ", combined_input)
             # print("Processing input with shape:", combined_input.shape)
             combined_input = combined_input.clone().detach().to(device).unsqueeze(0)
+            # print("combined_input) ", combined_input)
             output = net(combined_input)
             # print("output ", output)
             mp = net.lif_neurons.v

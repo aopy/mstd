@@ -1,5 +1,4 @@
 # 2 directions/neurons with STDP (increased speed (+1))
-# more fine-tuning
 
 
 import torch

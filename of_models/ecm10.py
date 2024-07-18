@@ -1,9 +1,9 @@
-# snn/stdp with dvs - 1 camera
-# use center receptive field of 11x11 size
-# 9 receptive fields in a 3x3 grid processed in a separate batch,
-# 4 channels: ON OFF, ON OFF with delay
-# dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
-# adjusting event coordinates to correct for angular resolution differences
+# SNN/STDP with DVS (1 camera)
+# Use center receptive field of 11x11 size
+# 9 receptive fields in a 3x3 grid processed in separate batches
+# 4 channels: ON+OFF, ON+OFF with delay
+# Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
+# Adjusting event coordinates to correct for angular resolution differences
 
 import torch
 import torch.nn as nn
@@ -248,6 +248,7 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
     def disable_inhibition(self):
         self.inhibition_enabled = False
 
+
 class SNN(MemoryModule):
     def __init__(self, input_shape, device):
         super(SNN, self).__init__()
@@ -343,6 +344,7 @@ if __name__ == '__main__':
             # print("output ", output)
             mp = net.lif_neurons.v
             # print("mps ", mp)
+            # print(net.fc.weight.data)
             learner.step(on_grad=True)
             optimizer.step()
             net.fc.weight.data.clamp_(w_min, w_max)
@@ -352,8 +354,9 @@ if __name__ == '__main__':
 
         net.reset()
         functional.reset_net(net)
+        learner.reset()
 
-    plot_weights(net.fc.weight.data, input_shape=(11, 11), num_channels=4, save_path="weights_final9x11x11")
+    plot_weights(net.fc.weight.data, input_shape=(11, 11), num_channels=4, save_path="weights_final_9x11x11")
 
     # net.eval()
     # net.lif_neurons.disable_inhibition()
