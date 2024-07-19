@@ -1,4 +1,6 @@
 # 2 directions/ 2 neurons, training with backpropagation
+# Backpropagation: after each stimulus presentation, the maximum membrane potentials of LIF neurons
+# with an infinite threshold are used in the cross-entropy loss calculation
 
 import torch
 import torch.nn as nn
