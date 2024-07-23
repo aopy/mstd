@@ -196,8 +196,8 @@ class EventDataset(Dataset):
 
 
 class LateralInhibitionLIFNode(neuron.LIFNode):
-    def __init__(self, tau=2.0, v_threshold=5.0, inhibition_strength=-5.0):
-        super().__init__(tau=tau, v_threshold=v_threshold)
+    def __init__(self, tau=2.0, v_threshold=5.0, v_reset=0.0, inhibition_strength=-5.0):
+        super().__init__(tau=tau, v_threshold=v_threshold, v_reset=v_reset)
         self.inhibition_strength = inhibition_strength
         self.inhibited_neurons_mask = None
         self.previous_v = None
@@ -294,7 +294,6 @@ def plot_weights(weights, input_shape=(11, 11), num_channels=4, save_path="weigh
 
 if __name__ == '__main__':
     # Network parameters
-    N_out = 8
     S, batch_size, width, height = 1, 9, 1280, 720
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
