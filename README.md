@@ -6,7 +6,7 @@ Stimuli: The project includes artificial stimuli (moving bars in directions up, 
 
 Learning: The project employs Spike-Timing-Dependent Plasticity (STDP) and backpropagation to achieve selectivity for motion directions and optic flow patterns.
 
-Hardware: The models are capable of running on both CPU and GPU, with CUDA support available to enhance computational efficiency and performance.
+Hardware: The models are capable of running on both CPU and GPU, with CUDA support if available, to enhance computational efficiency and performance.
 
 MSTD stands for dorsal medial superior temporal.
 
