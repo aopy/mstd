@@ -327,7 +327,7 @@ if __name__ == '__main__':
         start_time=25e6,
         end_time=26e6,
         device=device)
-    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)
+    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
 
     # Training loop
     print("TRAINING")
@@ -337,7 +337,7 @@ if __name__ == '__main__':
         frame_gen = dataset.create_frames_generator()
         for idx, combined_input in enumerate(frame_gen):
             print("time step (10ms) ", idx)
-            combined_input = combined_input.to(device)
+            combined_input = combined_input.to(device, non_blocking=True)
             # print(combined_input)
             output = net(combined_input)
             # print("output ", output)
