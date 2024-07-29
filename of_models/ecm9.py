@@ -1,8 +1,18 @@
-# SNN/STDP with DVS (1 camera)
-# Use center receptive field of 11x11 size
-# 4 channels: ON+OFF, ON+OFF with delay
-# Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
-# Adjusting event coordinates to correct for angular resolution differences
+"""
+Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using Dynamic Vision Sensor (DVS) data
+
+Model Description:
+- Utilizes a single camera setup with DVS input.
+- Processes a center receptive field of size 11x11 pixels.
+- Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
+- Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
+- Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
+
+Data and Preprocessing:
+- Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
+- Event coordinates are adjusted to correct for differences in angular resolution.
+
+"""
 
 import torch
 import torch.nn as nn

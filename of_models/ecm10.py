@@ -1,9 +1,19 @@
-# SNN/STDP with DVS (1 camera)
-# Use center receptive field of 11x11 size
-# 9 receptive fields in a 3x3 grid processed in separate batches
-# 4 channels: ON+OFF, ON+OFF with delay
-# Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
-# Adjusting event coordinates to correct for angular resolution differences
+"""
+Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using Dynamic Vision Sensor (DVS) data
+
+Model Description:
+- Utilizes a single camera setup with DVS input.
+- Processes a center receptive field of size 11x11 pixels.
+- Contains 9 receptive fields arranged in a 3x3 grid, each processed in separate batches.
+- Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
+- Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
+- Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
+
+Data and Preprocessing:
+- Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
+- Event coordinates are adjusted to correct for differences in angular resolution.
+
+"""
 
 import torch
 import torch.nn as nn
@@ -196,7 +206,7 @@ class EventDataset(Dataset):
 
 
 class LateralInhibitionLIFNode(neuron.LIFNode):
-    def __init__(self, tau=2.0, v_threshold=5.0, v_reset=0.0, inhibition_strength=-5.0):
+    def __init__(self, tau=20.0, v_threshold=10.0, v_reset=-5.0, inhibition_strength=-10.0):
         super().__init__(tau=tau, v_threshold=v_threshold, v_reset=v_reset)
         self.inhibition_strength = inhibition_strength
         self.inhibited_neurons_mask = None
