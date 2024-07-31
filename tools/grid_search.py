@@ -317,9 +317,13 @@ def check_for_motion_patterns(weights, rf_size=11):
     for neuron_idx in range(num_neurons):
         neuron_weights = weights[neuron_idx]
 
+        if neuron_weights.ndim != 3:
+            raise ValueError(f"Expected 3D array for neuron_weights, got {neuron_weights.ndim}D array instead.")
+
         for channel_idx in range(num_channels):
             channel_weights = neuron_weights[channel_idx]
             if channel_weights.ndim != 2:
+                print(f"Unexpected dimension for channel_weights: {channel_weights.ndim}. Data: {channel_weights}")
                 raise ValueError(f"Expected 2D array for channel_weights, got {channel_weights.ndim}D array instead.")
 
             print(f"Channel {channel_idx} weights shape: {channel_weights.shape}")
