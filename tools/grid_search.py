@@ -304,21 +304,25 @@ def check_for_motion_patterns(weights, rf_size=11):
     """
     Check the learned weights for patterns corresponding to different motion directions.
     Args:
-        weights (np.ndarray): Weight matrix for each neuron, shape (num_neurons, num_channels, height, width).
+        weights (np.ndarray): Weight matrix for each neuron, shape (num_neurons, input_size).
         rf_size (int): Size of the receptive field.
     Returns:
         float: Combined diversity and selectivity score.
     """
-    num_neurons = weights.shape[0]
-    num_channels = weights.shape[1]  # Should be 4 for ON, OFF, delayed ON, delayed OFF
+    num_neurons, input_size = weights.shape
+    num_channels = 4  # Expected number of channels: ON, OFF, delayed ON, delayed OFF
+    assert input_size == num_channels * rf_size * rf_size, "Unexpected input size"
+
     direction_counts = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
     total_score = 0
 
     for neuron_idx in range(num_neurons):
         neuron_weights = weights[neuron_idx]
+        if neuron_weights.ndim != 1:
+            raise ValueError(f"Expected 1D array for neuron_weights, got {neuron_weights.ndim}D array instead.")
 
-        if neuron_weights.ndim != 3:
-            raise ValueError(f"Expected 3D array for neuron_weights, got {neuron_weights.ndim}D array instead.")
+        # Reshape the weights from 1D to 3D (channels, height, width)
+        neuron_weights = neuron_weights.reshape(num_channels, rf_size, rf_size)
 
         for channel_idx in range(num_channels):
             channel_weights = neuron_weights[channel_idx]
@@ -328,10 +332,10 @@ def check_for_motion_patterns(weights, rf_size=11):
 
             print(f"Channel {channel_idx} weights shape: {channel_weights.shape}")
 
-            left_side = channel_weights[:, :rf_size//3]
-            right_side = channel_weights[:, -rf_size//3:]
-            top_side = channel_weights[:rf_size//3, :]
-            bottom_side = channel_weights[-rf_size//3:, :]
+            left_side = channel_weights[:, :rf_size // 3]
+            right_side = channel_weights[:, -rf_size // 3:]
+            top_side = channel_weights[:rf_size // 3, :]
+            bottom_side = channel_weights[-rf_size // 3:, :]
 
             neuron_direction_scores = {
                 'left': np.sum(right_side) - np.sum(left_side),
