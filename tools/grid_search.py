@@ -1,22 +1,6 @@
-"""
-Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using Dynamic Vision Sensor (DVS) data
-
-Model Description:
-- Utilizes a single camera setup with DVS input.
-- Processes a center receptive field of size 11x11 pixels.
-- Contains 9 receptive fields arranged in a 3x3 grid, each processed in separate batches.
-- Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
-- Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
-- Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
-
-Data and Preprocessing:
-- Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
-- Event coordinates are adjusted to correct for differences in angular resolution.
-
-"""
-
 import torch
 import torch.nn as nn
+from sklearn.model_selection import ParameterGrid
 from spikingjelly.activation_based import neuron, layer, learning, functional
 from spikingjelly.activation_based.base import MemoryModule
 import random
@@ -25,11 +9,6 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import hdf5plugin
 import h5py
-
-
-# Seed for reproducibility
-random.seed(8)
-torch.manual_seed(8)
 
 
 class EventDataset(Dataset):
@@ -206,7 +185,7 @@ class EventDataset(Dataset):
 
 
 class LateralInhibitionLIFNode(neuron.LIFNode):
-    def __init__(self, tau=20.0, v_threshold=10.0, v_reset=-5.0, inhibition_strength=-10.0):
+    def __init__(self, tau=10.0, v_threshold=10.0, v_reset=0.0, inhibition_strength=-10.0):
         super().__init__(tau=tau, v_threshold=v_threshold, v_reset=v_reset)
         self.inhibition_strength = inhibition_strength
         self.inhibited_neurons_mask = None
@@ -265,7 +244,7 @@ class SNN(MemoryModule):
         self.flatten = nn.Flatten()
         input_size = input_shape[1] * input_shape[2] * input_shape[3]  # Correct input size calculation
         self.fc = nn.Linear(input_size, 4, bias=False)  # Ensure the input size matches here
-        self.lif_neurons = LateralInhibitionLIFNode(tau=2.0, v_threshold=5.0)
+        self.lif_neurons = LateralInhibitionLIFNode(tau=10.0, v_threshold=10.0)
         self.to(device)
 
     def forward(self, x):
@@ -279,93 +258,114 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def plot_weights(weights, input_shape=(11, 11), num_channels=4, save_path="weights"):
-    num_neurons = weights.shape[0]
-    num_features_per_channel = input_shape[0] * input_shape[1]
-
-    fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 5, num_neurons * 5))
-    for neuron_idx in range(num_neurons):
-        for channel_idx in range(num_channels):
-            start_idx = channel_idx * num_features_per_channel
-            end_idx = start_idx + num_features_per_channel
-            neuron_weights = weights[neuron_idx, start_idx:end_idx].view(input_shape)
-
-            ax = axs[neuron_idx, channel_idx] if num_neurons > 1 else axs[channel_idx]
-            # Move to CPU before converting to numpy
-            im = ax.imshow(neuron_weights.cpu().detach().numpy(), cmap='viridis', origin='upper')
-            ax.set_title(f'Neuron {neuron_idx + 1}, Channel {channel_idx + 1}')
-            ax.axis('off')
-            plt.colorbar(im, ax=ax)
-
-    plt.tight_layout()
-    plt.savefig(f"{save_path}.png")
-    plt.close()
-
-
-if __name__ == '__main__':
-    # Network parameters
-    S, batch_size, width, height = 1, 9, 1280, 720
-    lr, w_min, w_max = 0.0008, 0.0, 0.3
-
-    # Calculate the correct input size for the fully connected layer
-    input_shape = (9, 4, 11, 11)  # Number of receptive fields, Channels, Height, Width
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(device)
+# Define the evaluation function
+def evaluate_pattern_matching(params, file_path, device):
+    input_shape = (9, 4, 11, 11)
     net = SNN(input_shape, device=device)
-    net.lif_neurons.enable_inhibition()
-    nn.init.uniform_(net.fc.weight.data, 0.001, 0.1)
-    # nn.init.constant_(net.fc.weight.data, 1.0)
+    net.lif_neurons.tau = params['tau']
+    net.lif_neurons.v_threshold = params['v_threshold']
+    net.lif_neurons.inhibition_strength = params['inhibition_strength']
+    optimizer = torch.optim.Adam(net.parameters(), lr=params['learning_rate'])
 
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
     learner = learning.STDPLearner(
         step_mode='s', synapse=net.fc, sn=net.lif_neurons,
-        tau_pre=5.0, tau_post=5.0,
-        f_pre=lambda x: torch.clamp(x, 0.0, 0.3), f_post=lambda x: torch.clamp(x, 0.0, 0.25),
+        tau_pre=params['tau_pre'], tau_post=params['tau_post'],
+        f_pre=lambda x: torch.clamp(x, 0.0, 0.3), f_post=lambda x: torch.clamp(x, 0.0, 0.3),
     )
 
-    # Load dataset
-    file_path = 'data/running-easy-events_right.h5'
-    # file_path = 'data/office-maze-events_right.h5'
-    # file_path = 'data/skate-easy-events_right.h5'
-    # running-easy-events_right contains 2017187149 events
-    # max_events = 1000000  # Set a small fraction of the recording to test
     dataset = EventDataset(
-        file_path,
-        max_events=None,
-        temporal_window=10e3,
-        delay=20e3,
-        start_time=25e6,
-        end_time=26e6,
-        device=device)
+        file_path, max_events=None, temporal_window=10e3, delay=20e3,
+        start_time=25e6, end_time=26e6, device=device
+    )
     data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
 
-    # Training loop
-    print("TRAINING")
-    for s in range(1):
-        print(s)
-        optimizer.zero_grad()
+    for epoch in range(params['epochs']):
+        net.train()
         frame_gen = dataset.create_frames_generator()
         for idx, combined_input in enumerate(frame_gen):
-            print("time step (10ms) ", idx)
             combined_input = combined_input.to(device, non_blocking=True)
-            # print(combined_input)
             output = net(combined_input)
-            # print("output ", output)
-            mp = net.lif_neurons.v
-            # print("mps ", mp)
-            # print(net.fc.weight.data)
+            optimizer.zero_grad()
             learner.step(on_grad=True)
             optimizer.step()
-            net.fc.weight.data.clamp_(w_min, w_max)
-            # Release memory
-            del combined_input
-            torch.cuda.empty_cache()
-
+            net.fc.weight.data.clamp_(0.0, 0.3)
         net.reset()
         functional.reset_net(net)
         learner.reset()
 
-    plot_weights(net.fc.weight.data, input_shape=(11, 11), num_channels=4, save_path="weights_final_9x11x11x1")
+    # Extract weights after training
+    weight_data = net.fc.weight.data.cpu().numpy()
+    pattern_score = check_for_motion_patterns(weight_data)
 
-    # net.eval()
-    # net.lif_neurons.disable_inhibition()
+    return pattern_score
+
+
+def check_for_motion_patterns(weights, rf_size=11):
+    """
+    Check the learned weights for patterns corresponding to different motion directions.
+    Args:
+        weights (np.ndarray): Weight matrix for each neuron, shape (num_neurons, num_channels, height, width).
+        rf_size (int): Size of the receptive field.
+    Returns:
+        float: Combined diversity and selectivity score.
+    """
+    num_neurons = weights.shape[0]
+    direction_counts = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
+    total_score = 0
+
+    for neuron_idx in range(num_neurons):
+        neuron_weights = weights[neuron_idx]
+        neuron_direction_scores = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
+
+        for channel_weights in neuron_weights:
+            left_side = channel_weights[:, :rf_size // 3]
+            right_side = channel_weights[:, -rf_size // 3:]
+            top_side = channel_weights[:rf_size // 3, :]
+            bottom_side = channel_weights[-rf_size // 3:, :]
+
+            neuron_direction_scores['left'] += np.sum(right_side) - np.sum(left_side)
+            neuron_direction_scores['right'] += np.sum(left_side) - np.sum(right_side)
+            neuron_direction_scores['up'] += np.sum(bottom_side) - np.sum(top_side)
+            neuron_direction_scores['down'] += np.sum(top_side) - np.sum(bottom_side)
+
+        # Determine the direction with the highest score for this neuron
+        preferred_direction = max(neuron_direction_scores, key=neuron_direction_scores.get)
+        if neuron_direction_scores[preferred_direction] > 0:
+            direction_counts[preferred_direction] += 1
+            total_score += neuron_direction_scores[preferred_direction]
+
+    # Diversity penalty: Penalize if any one direction dominates
+    diversity_penalty = sum(max(count - num_neurons / 4, 0) for count in direction_counts.values())
+    total_score -= diversity_penalty
+
+    return total_score
+
+
+if __name__ == '__main__':
+    # Define the parameter grid
+    param_grid = {
+        'tau': [10.0, 20.0, 30.0],
+        'v_threshold': [10.0, 20.0, 30.0],
+        'inhibition_strength': [-10.0, -20.0, -30.0],
+        'learning_rate': [0.0001, 0.001, 0.01],
+        'tau_pre': [5.0, 10.0, 15.0],
+        'tau_post': [5.0, 10.0, 15.0],
+        'epochs': [1, 3]
+    }
+
+    # File path to your data
+    file_path = 'data/running-easy-events_right.h5'
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(device)
+
+    # Grid search loop
+    best_score = float('-inf')
+    best_params = None
+    for params in ParameterGrid(param_grid):
+        pattern_score = evaluate_pattern_matching(params, file_path, device)
+        print(f"Params: {params}, Pattern Score: {pattern_score}")
+        if pattern_score > best_score:
+            best_score = pattern_score
+            best_params = params
+
+    print(f"Best Params: {best_params}, Best Pattern Score: {best_score}")
