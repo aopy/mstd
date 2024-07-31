@@ -310,22 +310,24 @@ def check_for_motion_patterns(weights, rf_size=11):
         float: Combined diversity and selectivity score.
     """
     num_neurons = weights.shape[0]
+    num_channels = weights.shape[1]  # Should be 4 for ON, OFF, delayed ON, delayed OFF
     direction_counts = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
     total_score = 0
 
     for neuron_idx in range(num_neurons):
         neuron_weights = weights[neuron_idx]
 
-        for channel_weights in neuron_weights:
+        for channel_idx in range(num_channels):
+            channel_weights = neuron_weights[channel_idx]
             if channel_weights.ndim != 2:
                 raise ValueError(f"Expected 2D array for channel_weights, got {channel_weights.ndim}D array instead.")
 
-            print(f"Channel weights shape: {channel_weights.shape}")
+            print(f"Channel {channel_idx} weights shape: {channel_weights.shape}")
 
-            left_side = channel_weights[:, :rf_size // 3]
-            right_side = channel_weights[:, -rf_size // 3:]
-            top_side = channel_weights[:rf_size // 3, :]
-            bottom_side = channel_weights[-rf_size // 3:, :]
+            left_side = channel_weights[:, :rf_size//3]
+            right_side = channel_weights[:, -rf_size//3:]
+            top_side = channel_weights[:rf_size//3, :]
+            bottom_side = channel_weights[-rf_size//3:, :]
 
             neuron_direction_scores = {
                 'left': np.sum(right_side) - np.sum(left_side),
@@ -334,7 +336,7 @@ def check_for_motion_patterns(weights, rf_size=11):
                 'down': np.sum(top_side) - np.sum(bottom_side)
             }
 
-            # Determine the direction with the highest score for this neuron
+            # Determine the direction with the highest score for this neuron and channel
             preferred_direction = max(neuron_direction_scores, key=neuron_direction_scores.get)
             if neuron_direction_scores[preferred_direction] > 0:
                 direction_counts[preferred_direction] += 1
