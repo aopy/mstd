@@ -315,24 +315,30 @@ def check_for_motion_patterns(weights, rf_size=11):
 
     for neuron_idx in range(num_neurons):
         neuron_weights = weights[neuron_idx]
-        neuron_direction_scores = {'left': 0, 'right': 0, 'up': 0, 'down': 0}
 
         for channel_weights in neuron_weights:
+            if channel_weights.ndim != 2:
+                raise ValueError(f"Expected 2D array for channel_weights, got {channel_weights.ndim}D array instead.")
+
+            print(f"Channel weights shape: {channel_weights.shape}")
+
             left_side = channel_weights[:, :rf_size // 3]
             right_side = channel_weights[:, -rf_size // 3:]
             top_side = channel_weights[:rf_size // 3, :]
             bottom_side = channel_weights[-rf_size // 3:, :]
 
-            neuron_direction_scores['left'] += np.sum(right_side) - np.sum(left_side)
-            neuron_direction_scores['right'] += np.sum(left_side) - np.sum(right_side)
-            neuron_direction_scores['up'] += np.sum(bottom_side) - np.sum(top_side)
-            neuron_direction_scores['down'] += np.sum(top_side) - np.sum(bottom_side)
+            neuron_direction_scores = {
+                'left': np.sum(right_side) - np.sum(left_side),
+                'right': np.sum(left_side) - np.sum(right_side),
+                'up': np.sum(bottom_side) - np.sum(top_side),
+                'down': np.sum(top_side) - np.sum(bottom_side)
+            }
 
-        # Determine the direction with the highest score for this neuron
-        preferred_direction = max(neuron_direction_scores, key=neuron_direction_scores.get)
-        if neuron_direction_scores[preferred_direction] > 0:
-            direction_counts[preferred_direction] += 1
-            total_score += neuron_direction_scores[preferred_direction]
+            # Determine the direction with the highest score for this neuron
+            preferred_direction = max(neuron_direction_scores, key=neuron_direction_scores.get)
+            if neuron_direction_scores[preferred_direction] > 0:
+                direction_counts[preferred_direction] += 1
+                total_score += neuron_direction_scores[preferred_direction]
 
     # Diversity penalty: Penalize if any one direction dominates
     diversity_penalty = sum(max(count - num_neurons / 4, 0) for count in direction_counts.values())
