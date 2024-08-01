@@ -146,10 +146,8 @@ class EventDataset(Dataset):
         return np.array(combined_on_frames), np.array(combined_off_frames)
 
     def create_frames_generator(self):
-        if self.cached_events is None:
-            self.cached_events = list(self.load_events_in_chunks())
-
-        current_events = self.cached_events
+        events_gen = self.load_events_in_chunks()
+        current_events = next(events_gen)
         timestamps = current_events[:, 3]
         min_time, max_time = timestamps.min(), timestamps.max()
         current_time = min_time
@@ -157,6 +155,14 @@ class EventDataset(Dataset):
         delayed_events = np.empty((0, 4))
 
         while True:
+            while (timestamps < current_time + self.temporal_window).any():
+                try:
+                    new_events = next(events_gen)
+                    current_events = np.concatenate((current_events, new_events), axis=0)
+                    timestamps = current_events[:, 3]
+                except StopIteration:
+                    break
+
             mask = (timestamps >= current_time) & (timestamps < current_time + self.temporal_window)
             delayed_mask = (timestamps >= current_time - self.delay) & (
                     timestamps < current_time - self.delay + self.temporal_window)
