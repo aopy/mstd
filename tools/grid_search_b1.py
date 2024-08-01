@@ -59,13 +59,6 @@ class EventDataset(Dataset):
         self.center_x = self.new_width // 2
         self.center_y = self.new_height // 2
 
-        # Define offsets for 9 receptive fields
-        self.rf_offsets = [
-            (-1, -1), (0, -1), (1, -1),
-            (-1, 0),  (0, 0),  (1, 0),
-            (-1, 1),  (0, 1),  (1, 1)
-        ]
-
     def load_events_in_chunks(self):
         if self.cached_events is None:
             print("Loading events from file...")
@@ -102,8 +95,8 @@ class EventDataset(Dataset):
         yield self.cached_events
 
     def preprocess_events(self, events):
-        combined_on_frames = []
-        combined_off_frames = []
+        on_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
+        off_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
 
         # Calculate scaling factors
         scale_x = self.new_width / self.width
@@ -117,39 +110,28 @@ class EventDataset(Dataset):
         events[:, 0] = np.clip(events[:, 0], 0, self.new_width - 1)
         events[:, 1] = np.clip(events[:, 1], 0, self.new_height - 1)
 
-        # Precompute indices
-        rf_indices = []
-        for dx, dy in self.rf_offsets:
-            x_min = self.center_x - (self.rf_size // 2) + dx * self.rf_size
-            x_max = x_min + self.rf_size
-            y_min = self.center_y - (self.rf_size // 2) + dy * self.rf_size
-            y_max = y_min + self.rf_size
-            rf_indices.append((x_min, x_max, y_min, y_max))
+        # Calculate the bounds of the receptive field around the center
+        x_min = self.center_x - (self.rf_size // 2)
+        x_max = self.center_x + (self.rf_size // 2) + 1
+        y_min = self.center_y - (self.rf_size // 2)
+        y_max = self.center_y + (self.rf_size // 2) + 1
 
-        for i, (x_min, x_max, y_min, y_max) in enumerate(rf_indices):
-            on_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
-            off_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
-
-            for event in events:
-                x, y, polarity, timestamp = int(event[0]), int(event[1]), int(event[2]), event[3]
-                if x_min <= x < x_max and y_min <= y < y_max:
-                    x_rf = x - x_min
-                    y_rf = y - y_min
+        for event in events:
+            x, y, polarity, timestamp = int(event[0]), int(event[1]), int(event[2]), event[3]
+            if x_min <= x < x_max and y_min <= y < y_max:
+                x_rf = x - x_min
+                y_rf = y - y_min
+                if 0 <= x_rf < self.rf_size and 0 <= y_rf < self.rf_size:  # Ensure indices are within bounds
                     if polarity == 1:
                         on_frame[y_rf, x_rf] = 1
                     else:
                         off_frame[y_rf, x_rf] = 1
 
-            combined_on_frames.append(on_frame)
-            combined_off_frames.append(off_frame)
-
-        return np.array(combined_on_frames), np.array(combined_off_frames)
+        return on_frame, off_frame
 
     def create_frames_generator(self):
-        if self.cached_events is None:
-            self.cached_events = list(self.load_events_in_chunks())
-
-        current_events = self.cached_events
+        events_gen = self.load_events_in_chunks()
+        current_events = next(events_gen)
         timestamps = current_events[:, 3]
         min_time, max_time = timestamps.min(), timestamps.max()
         current_time = min_time
@@ -157,6 +139,14 @@ class EventDataset(Dataset):
         delayed_events = np.empty((0, 4))
 
         while True:
+            while (timestamps < current_time + self.temporal_window).any():
+                try:
+                    new_events = next(events_gen)
+                    current_events = np.concatenate((current_events, new_events), axis=0)
+                    timestamps = current_events[:, 3]
+                except StopIteration:
+                    break
+
             mask = (timestamps >= current_time) & (timestamps < current_time + self.temporal_window)
             delayed_mask = (timestamps >= current_time - self.delay) & (
                     timestamps < current_time - self.delay + self.temporal_window)
@@ -165,12 +155,12 @@ class EventDataset(Dataset):
             delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (
                     delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
 
-            current_frames_on, current_frames_off = self.preprocess_events(frame_events)
-            delayed_frames_on, delayed_frames_off = self.preprocess_events(delayed_frame_events)
+            current_frame_on, current_frame_off = self.preprocess_events(frame_events)
+            delayed_frame_on, delayed_frame_off = self.preprocess_events(delayed_frame_events)
 
-            frames = np.stack([current_frames_on, current_frames_off, delayed_frames_on, delayed_frames_off], axis=1)
-            frames = torch.tensor(frames, dtype=torch.float32).to(self.device)  # Move frames to the specified device
-            yield frames
+            frame = np.stack([current_frame_on, current_frame_off, delayed_frame_on, delayed_frame_off], axis=0)
+            frame = torch.tensor(frame, dtype=torch.float32).to(self.device)  # Move frame to the specified device
+            yield frame
 
             delayed_events = np.concatenate((delayed_events, current_events[mask]), axis=0)
             delayed_events = delayed_events[delayed_events[:, 3] >= current_time - self.delay]
@@ -188,15 +178,13 @@ class EventDataset(Dataset):
 
 
 class LateralInhibitionLIFNode(neuron.LIFNode):
-    def __init__(self, tau=10.0, v_threshold=10.0, v_reset=0.0, inhibition_strength=-10.0):
+    def __init__(self, tau=2.0, v_threshold=5.0, v_reset=0.0, inhibition_strength=-5.0):
         super().__init__(tau=tau, v_threshold=v_threshold, v_reset=v_reset)
         self.inhibition_strength = inhibition_strength
         self.inhibited_neurons_mask = None
         self.previous_v = None
 
     def forward(self, x):
-        batch_size = x.size(0)
-
         # Ensure self.v is a tensor
         if not isinstance(self.v, torch.Tensor):
             self.v = torch.zeros(x.size(0), x.size(1)).to(x.device)
@@ -207,27 +195,27 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
 
         current_spikes = super().forward(x)  # Get current spikes from LIF dynamics
 
-        for b in range(batch_size):
-            if torch.any(current_spikes[b] > 0):
-                spiked_neurons = torch.where(current_spikes[b] > 0)[0]
-                if len(spiked_neurons) > 1:
-                    max_potentials = self.previous_v[b, spiked_neurons]
-                    max_potential_indices = (max_potentials == torch.max(max_potentials)).nonzero(as_tuple=True)[0]
-                    if len(max_potential_indices) > 1:
-                        winner_idx = spiked_neurons[
-                            max_potential_indices[torch.randint(len(max_potential_indices), (1,))]].item()
-                    else:
-                        winner_idx = spiked_neurons[max_potential_indices[0]].item()
+        if torch.any(current_spikes > 0):
+            spiked_neurons = torch.where(current_spikes > 0)[1]
+            if len(spiked_neurons) > 1:
+                max_potentials = self.previous_v[0, spiked_neurons]
+                max_potential_indices = (max_potentials == torch.max(max_potentials)).nonzero(as_tuple=True)[0]
+                if len(max_potential_indices) > 1:
+                    self.winner_idx = spiked_neurons[
+                        max_potential_indices[torch.randint(len(max_potential_indices), (1,))]].item()
                 else:
-                    winner_idx = spiked_neurons[0].item()
+                    self.winner_idx = spiked_neurons[max_potential_indices[0]].item()
+            else:
+                self.winner_idx = spiked_neurons[0].item()
 
-                inhibited_neurons_mask = torch.ones_like(current_spikes[b], dtype=torch.bool)
-                inhibited_neurons_mask[winner_idx] = False
-                self.v[b, inhibited_neurons_mask] = self.inhibition_strength
+            self.inhibited_neurons_mask = torch.ones_like(current_spikes, dtype=torch.bool)
+            self.inhibited_neurons_mask[0, self.winner_idx] = False
+            self.v[self.inhibited_neurons_mask] = self.inhibition_strength
 
+        output = current_spikes
         self.previous_v = self.v.clone()
 
-        return current_spikes
+        return output
 
     def reset(self):
         super().reset()
@@ -245,9 +233,9 @@ class SNN(MemoryModule):
     def __init__(self, input_shape, device):
         super(SNN, self).__init__()
         self.flatten = nn.Flatten()
-        input_size = input_shape[1] * input_shape[2] * input_shape[3]  # Correct input size calculation
-        self.fc = nn.Linear(input_size, 4, bias=False)  # Ensure the input size matches here
-        self.lif_neurons = LateralInhibitionLIFNode(tau=10.0, v_threshold=10.0)
+        input_size = input_shape[0] * input_shape[1] * input_shape[2]
+        self.fc = nn.Linear(input_size, 4, bias=False)
+        self.lif_neurons = LateralInhibitionLIFNode(tau=2.0, v_threshold=5.0)
         self.to(device)
 
     def forward(self, x):
@@ -263,7 +251,7 @@ class SNN(MemoryModule):
 
 # Define the evaluation function
 def evaluate_pattern_matching(params, file_path, device):
-    input_shape = (9, 4, 11, 11)
+    input_shape = (1, 4, 11, 11)
     net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
     nn.init.uniform_(net.fc.weight.data, 0.001, 0.1)
