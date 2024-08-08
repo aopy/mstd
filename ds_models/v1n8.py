@@ -1,6 +1,24 @@
-# 4 directions/ 8 neurons, training with backpropagation
-# Backpropagation: after each stimulus presentation, the maximum membrane potentials of LIF neurons
-# with an infinite threshold are used in the cross-entropy loss calculation
+"""
+Spiking Neural Network (SNN) Model using Backpropagation with Moving Bars Stimulus
+
+This script implements a Spiking Neural Network (SNN) model trained using backpropagation to classify
+the direction of moving bars stimulus. The SNN comprises Leaky Integrate-and-Fire (LIF) neurons with an
+infinite threshold. The training is performed using the AdamW optimizer and the cross-entropy loss function.
+
+Key Features:
+1. **Four Directions/Eight Neurons**: The network is trained to recognize four directions of a moving bar:
+   left-to-right, right-to-left, top-to-bottom, and bottom-to-top. There are eight neurons, with two neurons
+   expected to become selective to each direction but active during different times of the stimulus presentation.
+2. **Single Linear Layer**: The model uses a single linear layer to process the input stimuli.
+3. **Stimulus Generation**: The `create_moving_bars_stimulus_with_delay_and_labels` function generates
+   moving bars stimulus as tensors, with each frame having a delayed version to imitate synaptic delay,
+   thereby facilitating motion direction selectivity.
+4. **Training Process**: After each stimulus presentation, the maximum membrane potentials of LIF neurons
+   are used in the cross-entropy loss calculation for backpropagation.
+5. **Accuracy Calculation**: The training and testing accuracy is calculated to evaluate the performance
+   of the model.
+6. **Weight Visualization**: The weights of the neurons are visualized as heatmaps.
+"""
 
 import torch
 import torch.nn as nn

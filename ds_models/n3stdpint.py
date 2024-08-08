@@ -1,4 +1,23 @@
-# 3 neurons and 2 directions with stdp
+"""
+Spiking Neural Network (SNN) Model using STDP Learning with Moving Bars Stimulus and Lateral Inhibition
+
+This script implements a Spiking Neural Network (SNN) model trained using Spike-Timing-Dependent Plasticity (STDP)
+to classify the direction of moving bars stimulus. The SNN comprises Leaky Integrate-and-Fire (LIF) neurons with
+lateral inhibition, where the first neuron that spikes is declared the winner and inhibits the other neurons.
+
+Key Features:
+1. **Two Directions/Three Neurons**: The network is trained to recognize two directions of a moving bar:
+   left-to-right and right-to-left. There are three neurons, with two neurons expected to become selective to one
+   direction and one neuron to the other direction after training.
+2. **STDP Learning**: The model uses Spike-Timing-Dependent Plasticity (STDP) for learning.
+3. **Lateral Inhibition**: During stimulus presentation, the first neuron that spikes is declared the winner and
+   inhibits the other neurons.
+4. **Single Linear Layer**: The model uses a single linear layer to process the input stimuli.
+5. **Stimulus Generation**: The `create_moving_bars_stimulus_with_delay_and_labels` function generates moving bars
+   stimulus as tensors, with each frame having a delayed version to imitate synaptic delay, thereby facilitating
+   motion direction selectivity.
+6. **Unsupervised Learning**: No labels are used as the training is unsupervised.
+"""
 
 import torch
 import torch.nn as nn
