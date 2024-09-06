@@ -3,15 +3,14 @@ Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using
 
 Model Description:
 - Utilizes a single camera setup with DVS input.
-- Processes a center receptive field of size 11x11 pixels.
+- Processes a center receptive field of size 5x5 pixels.
 - Contains 9 receptive fields arranged in a 3x3 grid, each processed in separate batches.
 - Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
 - Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
 - Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
 
 Data and Preprocessing:
-- Dataset: https://cvg.cit.tum.de/data/datasets/visual-inertial-event-dataset
-- Event coordinates are adjusted to correct for differences in angular resolution.
+- Dataset: https://daniilidis-group.github.io/mvsec/
 
 """
 
@@ -33,7 +32,7 @@ torch.manual_seed(8)
 
 
 class EventDataset(Dataset):
-    def __init__(self, file_path, height=720, width=1280, chunk_size=100000,
+    def __init__(self, file_path, height=260, width=1280, chunk_size=100000,
                  max_events=None, temporal_window=1e3, delay=30e3, start_time=None, end_time=None, device=torch.device('cpu')):
         self.file_path = file_path
         self.height = height

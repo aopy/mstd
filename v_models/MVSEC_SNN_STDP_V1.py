@@ -30,7 +30,7 @@ torch.manual_seed(8)
 
 
 class EventDataset(Dataset):
-    def __init__(self, file_path, height=260, width=346, chunk_size=100000,
+    def __init__(self, file_path, height=260, width=346, chunk_size=10000,
                  max_events=None, temporal_window=1e3, delay=30e3, start_time=None, end_time=None, device=torch.device('cpu')):
         self.file_path = file_path
         self.height = height
@@ -69,9 +69,16 @@ class EventDataset(Dataset):
                     total_events = f['/davis/right/events'].shape[0]
                     print(f"Total events available: {total_events}")
 
-                    # Get the entire timestamp array to inspect the time range
-                    timestamps = f['/davis/right/events'][:, 3]
+                    timestamps = f['/davis/right/events'][:, 2]
                     print(f"First event timestamp: {timestamps[0]}, Last event timestamp: {timestamps[-1]}")
+
+                    # Adjust start_time and end_time based on actual timestamps
+                    if self.start_time is None:
+                        self.start_time = timestamps[0]
+                    if self.end_time is None:
+                        self.end_time = timestamps[-1]
+
+                    print(f"Adjusted Start time: {self.start_time}, End time: {self.end_time}")
 
                     total_to_load = min(total_events, self.max_events) if self.max_events else total_events
                     print(f"Total events to load: {total_to_load}")
@@ -80,19 +87,15 @@ class EventDataset(Dataset):
                         end = min(start + self.chunk_size, total_to_load)
                         events = f['/davis/right/events'][start:end]
 
-                        if self.start_time is not None:
-                            start_idx = np.searchsorted(events[:, 3], self.start_time, side='left')
-                        else:
-                            start_idx = 0
-
-                        if self.end_time is not None:
-                            end_idx = np.searchsorted(events[:, 3], self.end_time, side='right')
-                        else:
-                            end_idx = len(events)
+                        # Use the correct column for timestamps (column 2)
+                        start_idx = np.searchsorted(events[:, 2], self.start_time, side='left')
+                        end_idx = np.searchsorted(events[:, 2], self.end_time, side='right')
 
                         filtered_events = events[start_idx:end_idx]
+                        print(
+                            f"Chunk {start} to {end} — Loaded events from {start_idx} to {end_idx}, total loaded: {len(filtered_events)}")
+
                         events_list.append(filtered_events)
-                        print(f"Loaded events from {start_idx} to {end_idx}, total loaded: {len(filtered_events)}")
 
                 else:
                     print("No events found for the right camera.")
@@ -254,7 +257,7 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def plot_weights(weights, input_shape=(11, 11), num_channels=2, save_path="weights"):
+def plot_weights(weights, input_shape=(5, 5), num_channels=2, save_path="weights"):
     num_neurons = weights.shape[0]
     num_features_per_channel = input_shape[0] * input_shape[1]
 
@@ -284,7 +287,7 @@ if __name__ == '__main__':
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
     # Calculate the correct input size for the fully connected layer
-    input_shape = (4, 11, 11)  # Channels, Height, Width
+    input_shape = (4, 5, 5)  # Channels, Height, Width
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
     net = SNN(input_shape, device=device)
@@ -312,8 +315,8 @@ if __name__ == '__main__':
         max_events=None,
         temporal_window=10e3,  # 10 ms window for temporal resolution
         delay=20e3,
-        start_time=1e6,  # 25 seconds in microseconds
-        end_time=2e6,     # 26 seconds in microseconds
+        start_time=1504645177.42,
+        end_time=1504645177.42 + 5,
         device=device)
     # dataset = EventDataset(file_path, temporal_window=temporal_window)
     # data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -346,8 +349,8 @@ if __name__ == '__main__':
         net.reset()
         functional.reset_net(net)
 
-    plot_weights(net.fc.weight.data, input_shape=(11, 11), num_channels=4,
-                 save_path="weights_final11x11")
+    plot_weights(net.fc.weight.data, input_shape=(5, 5), num_channels=4,
+                 save_path="weights_final5x5")
 
     # net.eval()
     # net.lif_neurons.disable_inhibition()
