@@ -2,7 +2,7 @@ MSTD* is a computational neuroscience project aimed at modeling motion and depth
 
 It utilizes spiking neural networks (SNNs) based on the leaky integrate-and-fire neuron model.
 
-Stimuli: The project includes artificial stimuli (moving bars in directions up, down, left, right) found in the "ds_models" directory and event camera recordings (hand-held camera moving in an office environment) in the "of_models" directory.
+Stimuli: The project includes artificial stimuli (moving bars in directions up, down, left, right) found in the "ds_models" directory and event camera recordings (TUM-VIE and MVSEC datasets) in the "of_models" and "v_models" directories.
 
 Learning: The project employs Spike-Timing-Dependent Plasticity (STDP) and backpropagation to achieve selectivity for motion directions and optic flow patterns.
 
