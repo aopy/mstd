@@ -283,7 +283,7 @@ def plot_weights(weights, input_shape=(5, 5), num_channels=2, save_path="weights
 if __name__ == '__main__':
     # Network parameters
     N_out = 8
-    S, batch_size, width, height = 1, 1, 1280, 720
+    S, batch_size, width, height = 1, 1, 346, 260  # height=260, width=346,
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
     # Calculate the correct input size for the fully connected layer
@@ -313,10 +313,10 @@ if __name__ == '__main__':
     dataset = EventDataset(
         file_path,
         max_events=None,
-        temporal_window=10e3,  # 10 ms window for temporal resolution
-        delay=20e3,
+        temporal_window=0.01,  # 10 ms window for temporal resolution
+        delay=0.02,
         start_time=1504645177.42,
-        end_time=1504645177.42 + 5,
+        end_time=1504645177.42 + 1,
         device=device)
     # dataset = EventDataset(file_path, temporal_window=temporal_window)
     # data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -351,6 +351,3 @@ if __name__ == '__main__':
 
     plot_weights(net.fc.weight.data, input_shape=(5, 5), num_channels=4,
                  save_path="weights_final5x5")
-
-    # net.eval()
-    # net.lif_neurons.disable_inhibition()
