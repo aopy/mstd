@@ -3,7 +3,7 @@ Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using
 
 Model Description:
 - Utilizes a single camera setup with DVS input.
-- Processes a center receptive field of size 5x5 pixels.
+- Processes a center receptive field of size 5x5 (or 10x10) pixels.
 - Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
 - Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
 - Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
@@ -52,7 +52,8 @@ class EventDataset(Dataset):
         pixels_per_degree_vertical = self.height / fov_vertical
 
         # Set the receptive field size to cover 1 degree in both dimensions (5x5 pixels)
-        self.rf_size = int(min(pixels_per_degree_horizontal, pixels_per_degree_vertical))
+        # self.rf_size = int(min(pixels_per_degree_horizontal, pixels_per_degree_vertical))
+        self.rf_size = 10  # use larger receptive field size to have more events
 
         print(f"Size of receptive field (pixels per degree): {self.rf_size}")
 
@@ -111,6 +112,16 @@ class EventDataset(Dataset):
         yield self.cached_events
 
     def preprocess_events(self, events):
+        if len(events) == 0:
+            print("No events to process in this frame.")
+            return np.zeros((self.rf_size, self.rf_size), dtype=np.float32), np.zeros((self.rf_size, self.rf_size),
+                                                                                      dtype=np.float32)
+
+        x_coords = events[:, 0]
+        y_coords = events[:, 1]
+        print(f"Event x-coords min: {x_coords.min()}, max: {x_coords.max()}")
+        print(f"Event y-coords min: {y_coords.min()}, max: {y_coords.max()}")
+
         on_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
         off_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
 
@@ -120,19 +131,27 @@ class EventDataset(Dataset):
 
         # Calculate the bounds of the receptive field around the center (using the new rf_size)
         x_min = self.center_x - (self.rf_size // 2)
-        x_max = self.center_x + (self.rf_size // 2) + 1
+        x_max = self.center_x + (self.rf_size // 2)
+        # x_max = self.center_x + (self.rf_size // 2) + 1
         y_min = self.center_y - (self.rf_size // 2)
-        y_max = self.center_y + (self.rf_size // 2) + 1
+        y_max = self.center_y + (self.rf_size // 2)
+        # y_max = self.center_y + (self.rf_size // 2) + 1
+
+        print(f"Receptive field x_min: {x_min}, x_max: {x_max}")
+        print(f"Receptive field y_min: {y_min}, y_max: {y_max}")
 
         for event in events:
-            x, y, polarity, timestamp = int(event[0]), int(event[1]), int(event[2]), event[3]
+            x = int(event[0])
+            y = int(event[1])
+            timestamp = event[2]
+            polarity = int(event[3])
             if x_min <= x < x_max and y_min <= y < y_max:
                 x_rf = x - x_min
                 y_rf = y - y_min
                 if 0 <= x_rf < self.rf_size and 0 <= y_rf < self.rf_size:  # Ensure indices are within bounds
                     if polarity == 1:
                         on_frame[y_rf, x_rf] = 1
-                    else:
+                    elif polarity == -1 or polarity == 0:
                         off_frame[y_rf, x_rf] = 1
 
         return on_frame, off_frame
@@ -140,7 +159,7 @@ class EventDataset(Dataset):
     def create_frames_generator(self):
         events_gen = self.load_events_in_chunks()
         current_events = next(events_gen)
-        timestamps = current_events[:, 3]
+        timestamps = current_events[:, 2]
         min_time, max_time = timestamps.min(), timestamps.max()
         current_time = min_time
 
@@ -151,7 +170,7 @@ class EventDataset(Dataset):
                 try:
                     new_events = next(events_gen)
                     current_events = np.concatenate((current_events, new_events), axis=0)
-                    timestamps = current_events[:, 3]
+                    timestamps = current_events[:, 2]  # Ensure timestamps are updated correctly
                 except StopIteration:
                     break
 
@@ -160,23 +179,29 @@ class EventDataset(Dataset):
                     timestamps < current_time - self.delay + self.temporal_window)
 
             frame_events = current_events[mask]
-            delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (
-                    delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
+            delayed_frame_events = delayed_events[(delayed_events[:, 2] >= current_time - self.delay) & (
+                    delayed_events[:, 2] < current_time - self.delay + self.temporal_window)]
 
             current_frame_on, current_frame_off = self.preprocess_events(frame_events)
             delayed_frame_on, delayed_frame_off = self.preprocess_events(delayed_frame_events)
+
+            num_events_current = np.count_nonzero(current_frame_on) + np.count_nonzero(current_frame_off)
+            num_events_delayed = np.count_nonzero(delayed_frame_on) + np.count_nonzero(delayed_frame_off)
+            print(f"Current frame events: {num_events_current}, Delayed frame events: {num_events_delayed}")
 
             frame = np.stack([current_frame_on, current_frame_off, delayed_frame_on, delayed_frame_off], axis=0)
             frame = torch.tensor(frame, dtype=torch.float32).to(self.device)  # Move frame to the specified device
             yield frame
 
             delayed_events = np.concatenate((delayed_events, current_events[mask]), axis=0)
-            delayed_events = delayed_events[delayed_events[:, 3] >= current_time - self.delay]
+            delayed_events = delayed_events[delayed_events[:, 2] >= current_time - self.delay]  # Corrected index
             current_events = current_events[~mask]
-            timestamps = current_events[:, 3]
+            timestamps = current_events[:, 2]  # Update timestamps correctly
             current_time += self.temporal_window
             if current_time > max_time and current_events.size == 0:
                 break
+        print(f"Number of events in current time window: {np.sum(mask)}")
+        print(f"Number of events in delayed time window: {len(delayed_frame_events)}")
 
     def __len__(self):
         return 1000000  # Placeholder
@@ -257,11 +282,11 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def plot_weights(weights, input_shape=(5, 5), num_channels=2, save_path="weights"):
+def plot_weights(weights, input_shape=(10, 10), num_channels=2, save_path="weights"):
     num_neurons = weights.shape[0]
     num_features_per_channel = input_shape[0] * input_shape[1]
 
-    fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 5, num_neurons * 5))
+    fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 10, num_neurons * 10))
     for neuron_idx in range(num_neurons):
         for channel_idx in range(num_channels):
             start_idx = channel_idx * num_features_per_channel
@@ -287,13 +312,12 @@ if __name__ == '__main__':
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
     # Calculate the correct input size for the fully connected layer
-    input_shape = (4, 5, 5)  # Channels, Height, Width
+    input_shape = (4, 10, 10)  # Channels, Height, Width
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
     net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
     # net.lif_neurons.disable_inhibition()
-    # nn.init.uniform_(net.fc.weight.data, 0.0001, 0.01)
     nn.init.uniform_(net.fc.weight.data, 0.1, 0.3)
     # nn.init.constant_(net.fc.weight.data, 0.3)
 
@@ -306,7 +330,6 @@ if __name__ == '__main__':
 
     # Load dataset
     file_path = 'data/indoor_flying1_data.hdf5'
-    # file_path = 'data/office-maze-events_right.h5'
     # max_events = 1000000  # Set a small fraction of the recording to test
 
     max_events = 100000
@@ -349,5 +372,5 @@ if __name__ == '__main__':
         net.reset()
         functional.reset_net(net)
 
-    plot_weights(net.fc.weight.data, input_shape=(5, 5), num_channels=4,
-                 save_path="weights_final5x5")
+    plot_weights(net.fc.weight.data, input_shape=(10, 10), num_channels=4,
+                 save_path="weights_final10x10")
