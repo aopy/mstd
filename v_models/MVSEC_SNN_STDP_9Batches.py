@@ -3,7 +3,7 @@ Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using
 
 Model Description:
 - Utilizes a single camera setup with DVS input.
-- Processes a center receptive field of size 5x5 pixels.
+- Processes a center receptive field of size 10x10 pixels.
 - Contains 9 receptive fields arranged in a 3x3 grid, each processed in separate batches.
 - Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
 - Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
@@ -32,7 +32,7 @@ torch.manual_seed(8)
 
 
 class EventDataset(Dataset):
-    def __init__(self, file_path, height=260, width=1280, chunk_size=100000,
+    def __init__(self, file_path, height=260, width=346, chunk_size=10000,
                  max_events=None, temporal_window=1e3, delay=30e3, start_time=None, end_time=None, device=torch.device('cpu')):
         self.file_path = file_path
         self.height = height
@@ -46,120 +46,120 @@ class EventDataset(Dataset):
         self.cached_events = None  # Cache to store events
         self.device = device
 
-        # Calculate aspect ratio based on FoV
-        fov_horizontal = 90  # degrees
-        fov_vertical = 65  # degrees
-        self.aspect_ratio = fov_horizontal / fov_vertical
-
-        # Determine new dimensions based on aspect ratio
-        self.new_width = round(self.height * self.aspect_ratio)
-        self.new_height = self.height
-
-        print(f"New dimensions of main frame: width {self.new_width}, height {self.new_height}")
-
-        # Calculate the size of 1° of visual angle in pixels
-        pixels_per_degree_horizontal = self.new_width / fov_horizontal
-        pixels_per_degree_vertical = self.new_height / fov_vertical
-
-        # Set the receptive field size to cover 1 degree in both dimensions
-        self.rf_size = int(min(pixels_per_degree_horizontal, pixels_per_degree_vertical))
+        # Set the receptive field size to 10x10 pixels
+        self.rf_size = 10  # size of each receptive field
 
         print(f"Size of receptive field (pixels per degree): {self.rf_size}")
 
         # Center coordinates for the receptive field
-        self.center_x = self.new_width // 2
-        self.center_y = self.new_height // 2
+        self.center_x = self.width // 2
+        self.center_y = self.height // 2
 
-        # Define offsets for 9 receptive fields
-        self.rf_offsets = [
-            (-1, -1), (0, -1), (1, -1),
-            (-1, 0),  (0, 0),  (1, 0),
-            (-1, 1),  (0, 1),  (1, 1)
-        ]
+        # Define the positions of the 9 receptive fields in a 3x3 grid
+        self.receptive_fields = []
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                x_min = int(self.center_x + i * self.rf_size)
+                y_min = int(self.center_y + j * self.rf_size)
+                x_max = x_min + self.rf_size
+                y_max = y_min + self.rf_size
+
+                # Ensure that the receptive fields are within the image bounds
+                x_min = max(0, x_min)
+                x_max = min(self.width, x_max)
+                y_min = max(0, y_min)
+                y_max = min(self.height, y_max)
+
+                self.receptive_fields.append({'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max})
 
     def load_events_in_chunks(self):
         if self.cached_events is None:
             print("Loading events from file...")
             events_list = []
             with h5py.File(self.file_path, 'r') as f:
-                if 'events' in f and all(key in f['events'] for key in ['x', 'y', 'p', 't']):
-                    total_events = f['events']['x'].shape[0]
+                if '/davis/right/events' in f:
+                    total_events = f['/davis/right/events'].shape[0]
+                    print(f"Total events available: {total_events}")
+
+                    timestamps = f['/davis/right/events'][:, 2]
+                    print(f"First event timestamp: {timestamps[0]}, Last event timestamp: {timestamps[-1]}")
+
+                    # Adjust start_time and end_time based on actual timestamps
+                    if self.start_time is None:
+                        self.start_time = timestamps[0]
+                    if self.end_time is None:
+                        self.end_time = timestamps[-1]
+
+                    print(f"Adjusted Start time: {self.start_time}, End time: {self.end_time}")
+
                     total_to_load = min(total_events, self.max_events) if self.max_events else total_events
+                    print(f"Total events to load: {total_to_load}")
+
                     for start in range(0, total_to_load, self.chunk_size):
                         end = min(start + self.chunk_size, total_to_load)
-                        x = f['events']['x'][start:end]
-                        y = f['events']['y'][start:end]
-                        p = f['events']['p'][start:end]
-                        t = f['events']['t'][start:end]
+                        events = f['/davis/right/events'][start:end]
 
-                        # Filter events by start_time and end_time
-                        if self.start_time is not None:
-                            start_idx = np.searchsorted(t, self.start_time, side='left')
-                        else:
-                            start_idx = 0
+                        # Use the correct column for timestamps (column 2)
+                        start_idx = np.searchsorted(events[:, 2], self.start_time, side='left')
+                        end_idx = np.searchsorted(events[:, 2], self.end_time, side='right')
 
-                        if self.end_time is not None:
-                            end_idx = np.searchsorted(t, self.end_time, side='right')
-                        else:
-                            end_idx = len(t)
+                        filtered_events = events[start_idx:end_idx]
+                        print(
+                            f"Chunk {start} to {end} — Loaded events from {start_idx} to {end_idx}, total loaded: {len(filtered_events)}")
 
-                        events = np.column_stack(
-                            (x[start_idx:end_idx], y[start_idx:end_idx], p[start_idx:end_idx], t[start_idx:end_idx]))
-                        events_list.append(events)
-            self.cached_events = np.concatenate(events_list, axis=0)
+                        events_list.append(filtered_events)
+
+                else:
+                    print("No events found for the right camera.")
+
+            if len(events_list) > 0:
+                self.cached_events = np.concatenate(events_list, axis=0)
+            else:
+                print("No events were loaded.")
+                self.cached_events = np.empty((0, 4))
         else:
             print("Using cached events...")
 
         yield self.cached_events
 
     def preprocess_events(self, events):
-        combined_on_frames = []
-        combined_off_frames = []
+        frames = []
+        for idx, rf in enumerate(self.receptive_fields):
+            x_min = rf['x_min']
+            x_max = rf['x_max']
+            y_min = rf['y_min']
+            y_max = rf['y_max']
 
-        # Calculate scaling factors
-        scale_x = self.new_width / self.width
-        scale_y = self.new_height / self.height
-
-        # Adjust the coordinates based on scaling factors and round to nearest integers
-        events[:, 0] = np.round(events[:, 0] * scale_x).astype(int)
-        events[:, 1] = np.round(events[:, 1] * scale_y).astype(int)
-
-        # Ensure events are within bounds of the entire frame
-        events[:, 0] = np.clip(events[:, 0], 0, self.new_width - 1)
-        events[:, 1] = np.clip(events[:, 1], 0, self.new_height - 1)
-
-        # Precompute indices
-        rf_indices = []
-        for dx, dy in self.rf_offsets:
-            x_min = self.center_x - (self.rf_size // 2) + dx * self.rf_size
-            x_max = x_min + self.rf_size
-            y_min = self.center_y - (self.rf_size // 2) + dy * self.rf_size
-            y_max = y_min + self.rf_size
-            rf_indices.append((x_min, x_max, y_min, y_max))
-
-        for i, (x_min, x_max, y_min, y_max) in enumerate(rf_indices):
             on_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
             off_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
 
-            for event in events:
-                x, y, polarity, timestamp = int(event[0]), int(event[1]), int(event[2]), event[3]
-                if x_min <= x < x_max and y_min <= y < y_max:
-                    x_rf = x - x_min
-                    y_rf = y - y_min
-                    if polarity == 1:
-                        on_frame[y_rf, x_rf] = 1
-                    else:
-                        off_frame[y_rf, x_rf] = 1
+            # Select events within this receptive field
+            mask = (events[:, 0] >= x_min) & (events[:, 0] < x_max) & (events[:, 1] >= y_min) & (events[:, 1] < y_max)
+            rf_events = events[mask]
 
-            combined_on_frames.append(on_frame)
-            combined_off_frames.append(off_frame)
+            # Map event coordinates to receptive field coordinates
+            x_rf = rf_events[:, 0] - x_min
+            y_rf = rf_events[:, 1] - y_min
+            polarities = rf_events[:, 3]
 
-        return np.array(combined_on_frames), np.array(combined_off_frames)
+            # Set events in on_frame and off_frame
+            for x, y, p in zip(x_rf, y_rf, polarities):
+                x_idx = int(x)
+                y_idx = int(y)
+                if x_idx >= 0 and x_idx < self.rf_size and y_idx >= 0 and y_idx < self.rf_size:
+                    if p == 1:
+                        on_frame[y_idx, x_idx] = 1
+                    elif p == -1 or p == 0:
+                        off_frame[y_idx, x_idx] = 1
+
+            frames.append((on_frame, off_frame))
+
+        return frames  # List of (on_frame, off_frame)
 
     def create_frames_generator(self):
         events_gen = self.load_events_in_chunks()
         current_events = next(events_gen)
-        timestamps = current_events[:, 3]
+        timestamps = current_events[:, 2]
         min_time, max_time = timestamps.min(), timestamps.max()
         current_time = min_time
 
@@ -170,7 +170,7 @@ class EventDataset(Dataset):
                 try:
                     new_events = next(events_gen)
                     current_events = np.concatenate((current_events, new_events), axis=0)
-                    timestamps = current_events[:, 3]
+                    timestamps = current_events[:, 2]
                 except StopIteration:
                     break
 
@@ -179,20 +179,29 @@ class EventDataset(Dataset):
                     timestamps < current_time - self.delay + self.temporal_window)
 
             frame_events = current_events[mask]
-            delayed_frame_events = delayed_events[(delayed_events[:, 3] >= current_time - self.delay) & (
-                    delayed_events[:, 3] < current_time - self.delay + self.temporal_window)]
+            delayed_frame_events = delayed_events[(delayed_events[:, 2] >= current_time - self.delay) & (
+                    delayed_events[:, 2] < current_time - self.delay + self.temporal_window)]
 
-            current_frames_on, current_frames_off = self.preprocess_events(frame_events)
-            delayed_frames_on, delayed_frames_off = self.preprocess_events(delayed_frame_events)
+            # Process frames for each receptive field
+            frames = []
+            current_frames = self.preprocess_events(frame_events)
+            delayed_frames = self.preprocess_events(delayed_frame_events)
 
-            frames = np.stack([current_frames_on, current_frames_off, delayed_frames_on, delayed_frames_off], axis=1)
-            frames = torch.tensor(frames, dtype=torch.float32).to(self.device)  # Move frames to the specified device
-            yield frames
+            # For each receptive field, stack the current and delayed frames
+            for (current_on, current_off), (delayed_on, delayed_off) in zip(current_frames, delayed_frames):
+                frame = np.stack([current_on, current_off, delayed_on, delayed_off], axis=0)
+                frames.append(frame)
+
+            # Stack frames to create a batch
+            batch_frames = np.stack(frames, axis=0)  # Shape: (batch_size, channels, height, width)
+            batch_frames = torch.tensor(batch_frames, dtype=torch.float32).to(self.device)
+
+            yield batch_frames
 
             delayed_events = np.concatenate((delayed_events, current_events[mask]), axis=0)
-            delayed_events = delayed_events[delayed_events[:, 3] >= current_time - self.delay]
+            delayed_events = delayed_events[delayed_events[:, 2] >= current_time - self.delay]
             current_events = current_events[~mask]
-            timestamps = current_events[:, 3]
+            timestamps = current_events[:, 2]
             current_time += self.temporal_window
             if current_time > max_time and current_events.size == 0:
                 break
@@ -205,25 +214,25 @@ class EventDataset(Dataset):
 
 
 class LateralInhibitionLIFNode(neuron.LIFNode):
-    def __init__(self, tau=20.0, v_threshold=10.0, v_reset=-5.0, inhibition_strength=-10.0):
+    def __init__(self, tau=2.0, v_threshold=5.0, v_reset=0.0, inhibition_strength=-5.0):
         super().__init__(tau=tau, v_threshold=v_threshold, v_reset=v_reset)
         self.inhibition_strength = inhibition_strength
         self.inhibited_neurons_mask = None
         self.previous_v = None
 
     def forward(self, x):
-        batch_size = x.size(0)
-
-        # Ensure self.v is a tensor
+        # x is of shape (batch_size, num_neurons)
         if not isinstance(self.v, torch.Tensor):
-            self.v = torch.zeros(x.size(0), x.size(1)).to(x.device)
+            self.v = torch.zeros_like(x).to(x.device)
 
-        # Initialize previous_v if it's the first call and self.v is already a tensor
         if self.previous_v is None or self.previous_v.shape != self.v.shape:
             self.previous_v = torch.zeros_like(self.v).to(x.device)
 
         current_spikes = super().forward(x)  # Get current spikes from LIF dynamics
 
+        # Process each sample in the batch separately
+        batch_size = x.size(0)
+        print("batch_size ", batch_size)
         for b in range(batch_size):
             if torch.any(current_spikes[b] > 0):
                 spiked_neurons = torch.where(current_spikes[b] > 0)[0]
@@ -231,8 +240,7 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
                     max_potentials = self.previous_v[b, spiked_neurons]
                     max_potential_indices = (max_potentials == torch.max(max_potentials)).nonzero(as_tuple=True)[0]
                     if len(max_potential_indices) > 1:
-                        winner_idx = spiked_neurons[
-                            max_potential_indices[torch.randint(len(max_potential_indices), (1,))]].item()
+                        winner_idx = spiked_neurons[max_potential_indices[torch.randint(len(max_potential_indices), (1,))]].item()
                     else:
                         winner_idx = spiked_neurons[max_potential_indices[0]].item()
                 else:
@@ -240,7 +248,7 @@ class LateralInhibitionLIFNode(neuron.LIFNode):
 
                 inhibited_neurons_mask = torch.ones_like(current_spikes[b], dtype=torch.bool)
                 inhibited_neurons_mask[winner_idx] = False
-                self.v[b, inhibited_neurons_mask] = self.inhibition_strength
+                self.v[b][inhibited_neurons_mask] = self.inhibition_strength
 
         self.previous_v = self.v.clone()
 
@@ -262,12 +270,13 @@ class SNN(MemoryModule):
     def __init__(self, input_shape, device):
         super(SNN, self).__init__()
         self.flatten = nn.Flatten()
-        input_size = input_shape[1] * input_shape[2] * input_shape[3]  # Correct input size calculation
-        self.fc = nn.Linear(input_size, 4, bias=False)  # Ensure the input size matches here
+        input_size = input_shape[0] * input_shape[1] * input_shape[2]
+        self.fc = nn.Linear(input_size, 4, bias=False)
         self.lif_neurons = LateralInhibitionLIFNode(tau=2.0, v_threshold=5.0)
         self.to(device)
 
     def forward(self, x):
+        # x is of shape (batch_size, channels, height, width)
         x = self.flatten(x)
         x = self.fc(x)
         x = self.lif_neurons(x)
@@ -278,11 +287,11 @@ class SNN(MemoryModule):
         self.lif_neurons.reset()
 
 
-def plot_weights(weights, input_shape=(11, 11), num_channels=4, save_path="weights"):
+def plot_weights(weights, input_shape=(10, 10), num_channels=2, save_path="weights"):
     num_neurons = weights.shape[0]
     num_features_per_channel = input_shape[0] * input_shape[1]
 
-    fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 5, num_neurons * 5))
+    fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 10, num_neurons * 10))
     for neuron_idx in range(num_neurons):
         for channel_idx in range(num_channels):
             start_idx = channel_idx * num_features_per_channel
@@ -303,40 +312,43 @@ def plot_weights(weights, input_shape=(11, 11), num_channels=4, save_path="weigh
 
 if __name__ == '__main__':
     # Network parameters
-    S, batch_size, width, height = 1, 9, 1280, 720
+    N_out = 4
+    S, batch_size, width, height = 1, 9, 346, 260  # width=346, height=260
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
     # Calculate the correct input size for the fully connected layer
-    input_shape = (9, 4, 11, 11)  # Number of receptive fields, Channels, Height, Width
+    input_shape = (4, 10, 10)  # Channels, Height, Width
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
     net = SNN(input_shape, device=device)
     net.lif_neurons.enable_inhibition()
-    nn.init.uniform_(net.fc.weight.data, 0.001, 0.1)
-    # nn.init.constant_(net.fc.weight.data, 1.0)
+    # net.lif_neurons.disable_inhibition()
+    nn.init.uniform_(net.fc.weight.data, 0.1, 0.3)
+    # nn.init.constant_(net.fc.weight.data, 0.3)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
     learner = learning.STDPLearner(
-        step_mode='s', synapse=net.fc, sn=net.lif_neurons,
-        tau_pre=5.0, tau_post=5.0,
+        step_mode='s', synapse=net.fc, sn=net.lif_neurons,  # synapse=net[1], sn=net[2],
+        tau_pre=5.0, tau_post=5.0,  # one neuron spikes twice
         f_pre=lambda x: torch.clamp(x, 0.0, 0.3), f_post=lambda x: torch.clamp(x, 0.0, 0.25),
     )
 
     # Load dataset
-    file_path = 'data/running-easy-events_right.h5'
-    # file_path = 'data/office-maze-events_right.h5'
-    # file_path = 'data/skate-easy-events_right.h5'
-    # running-easy-events_right contains 2017187149 events
+    file_path = 'data/indoor_flying1_data.hdf5'
     # max_events = 1000000  # Set a small fraction of the recording to test
+
+    max_events = 100000
     dataset = EventDataset(
         file_path,
         max_events=None,
-        temporal_window=10e3,
-        delay=20e3,
-        start_time=25e6,
-        end_time=26e6,
+        temporal_window=0.01,  # 10 ms window for temporal resolution
+        delay=0.02,
+        start_time=1504645177.42,
+        end_time=1504645177.42 + 1,
         device=device)
-    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
+    # dataset = EventDataset(file_path, temporal_window=temporal_window)
+    # data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)  # multiple workers/parallel loading
 
     # Training loop
     print("TRAINING")
@@ -345,14 +357,11 @@ if __name__ == '__main__':
         optimizer.zero_grad()
         frame_gen = dataset.create_frames_generator()
         for idx, combined_input in enumerate(frame_gen):
-            print("time step (10ms) ", idx)
-            combined_input = combined_input.to(device, non_blocking=True)
+            # print("time step (10ms) ", idx)
             # print(combined_input)
+            # combined_input will be of shape (batch_size, channels, height, width)
             output = net(combined_input)
-            # print("output ", output)
             mp = net.lif_neurons.v
-            # print("mps ", mp)
-            # print(net.fc.weight.data)
             learner.step(on_grad=True)
             optimizer.step()
             net.fc.weight.data.clamp_(w_min, w_max)
@@ -362,9 +371,6 @@ if __name__ == '__main__':
 
         net.reset()
         functional.reset_net(net)
-        learner.reset()
 
-    plot_weights(net.fc.weight.data, input_shape=(11, 11), num_channels=4, save_path="weights_final_9x11x11x1")
-
-    # net.eval()
-    # net.lif_neurons.disable_inhibition()
+    plot_weights(net.fc.weight.data, input_shape=(10, 10), num_channels=4,
+                 save_path="weights_final10x10")
