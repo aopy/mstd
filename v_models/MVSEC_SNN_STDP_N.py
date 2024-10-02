@@ -7,7 +7,7 @@ Model Description:
 - Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
 - Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
 - Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
-- Uses Norse library
+- Uses Norse library.
 
 Data and Preprocessing:
 - Dataset: https://daniilidis-group.github.io/mvsec/
@@ -21,9 +21,9 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import hdf5plugin
 import h5py
-from norse.torch.module.lif import LIFCell, LIFParameters
-from norse.torch.functional.lif import LIFState
-from norse.torch.functional.stdp import STDPParameters, stdp_step
+from norse.torch.functional.lif import LIFParameters, LIFState
+from norse.torch.functional.stdp import stdp_step_linear, STDPParameters
+from norse.torch.functional.stdp import STDPState
 
 # Seed for reproducibility
 random.seed(8)
@@ -208,56 +208,76 @@ class EventDataset(Dataset):
         raise NotImplementedError("Use create_frames_generator() to iterate through the dataset.")
 
 
+def custom_lif_step(input_tensor, state, p):
+    # Unpack the state
+    v, i = state.v, state.i
+
+    # Compute synaptic input current
+    i_new = i + p.tau_syn_inv * (input_tensor - i)
+
+    # Update membrane potential
+    v_new = v + p.tau_mem_inv * (i_new - v)
+
+    # Check for spikes (when membrane potential crosses threshold)
+    z_new = (v_new >= p.v_th).to(v_new.dtype)
+
+    # Store pre-reset membrane potential
+    v_before_reset = v_new.clone()
+
+    # Apply reset
+    v_new = torch.where(z_new > 0, v_new - p.v_reset, v_new)
+
+    # Return new state and spike output
+    new_state = LIFState(z=z_new, v=v_new, i=i_new)
+
+    return z_new, new_state, v_before_reset
+
+
 class LateralInhibitionLIFCell(nn.Module):
-    def __init__(self, p=LIFParameters(tau_syn_inv=0.5, tau_mem_inv=0.5), inhibition_strength=-5.0):
+    def __init__(self, p=LIFParameters(tau_syn_inv=0.5, tau_mem_inv=0.5, v_th=1.0, v_reset=0.0), inhibition_strength=-5.0):
         super().__init__()
-        self.lif_cell = LIFCell(p=p)
+        self.p = p
         self.inhibition_strength = inhibition_strength
-        self.previous_v = None
 
     def forward(self, x, state):
-        # x: Input tensor
-        # state: LIFState
-
-        # Initialize state if None
         if state is None:
+            batch_size = x.size(0)
+            neuron_count = x.size(1)
             state = LIFState(
-                z=torch.zeros(x.size(0), self.lif_cell.state_size, device=x.device),
-                v=torch.zeros(x.size(0), self.lif_cell.state_size, device=x.device),
+                z=torch.zeros(batch_size, neuron_count, device=x.device),
+                v=torch.zeros(batch_size, neuron_count, device=x.device),
+                i=torch.zeros(batch_size, neuron_count, device=x.device),
             )
 
-        # Forward through LIFCell
-        z, new_state = self.lif_cell(x, state)
+        # Forward through custom LIF function
+        z, new_state, v_before_reset = custom_lif_step(x, state, self.p)
 
         # Lateral inhibition logic
         if torch.any(z > 0):
             spiked_neurons = torch.nonzero(z[0] > 0).squeeze()
             if spiked_neurons.numel() > 1:
-                if self.previous_v is None:
-                    self.previous_v = state.v
-                max_potentials = self.previous_v[0, spiked_neurons]
-                max_potential_indices = (max_potentials == torch.max(max_potentials)).nonzero(as_tuple=True)[0]
-                if len(max_potential_indices) > 1:
-                    winner_idx = spiked_neurons[
-                        max_potential_indices[torch.randint(len(max_potential_indices), (1,))]].item()
-                else:
-                    winner_idx = spiked_neurons[max_potential_indices[0]].item()
+                # Get membrane potentials at the time of spike
+                v_spiked = v_before_reset[0, spiked_neurons]
+                # Find the neuron with the highest membrane potential
+                max_potential, max_index = torch.max(v_spiked, dim=0)
+                winner_idx = spiked_neurons[max_index].item()
             else:
                 winner_idx = spiked_neurons.item()
 
+            # Apply inhibition to other neurons
             inhibition_mask = torch.ones_like(z[0], dtype=torch.bool)
             inhibition_mask[winner_idx] = False
             new_state = LIFState(
                 z=new_state.z,
-                v=torch.where(inhibition_mask, torch.full_like(new_state.v[0], self.inhibition_strength), new_state.v[0]).unsqueeze(0)
+                v=torch.where(inhibition_mask, torch.full_like(new_state.v[0], self.inhibition_strength), new_state.v[0]).unsqueeze(0),
+                i=new_state.i,
             )
-
-        self.previous_v = new_state.v.clone()
+            z[0][inhibition_mask] = 0  # Set spikes of inhibited neurons to zero
 
         return z, new_state
 
     def reset(self):
-        self.previous_v = None
+        pass
 
 
 class SNN(nn.Module):
@@ -277,19 +297,19 @@ class SNN(nn.Module):
         return z, new_state
 
     def reset(self):
-        self.lif_neurons.reset()
+        pass  # No internal state to reset in the LIF cell
 
 
 def plot_weights(weights, input_shape=(10, 10), num_channels=2, save_path="weights"):
     num_neurons = weights.shape[0]
-    num_features_per_channel = input_shape[0] * input_shape[1]
+    num_features_per_channel = input_shape[1] * input_shape[2]
 
-    fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 10, num_neurons * 10))
+    fig, axs = plt.subplots(num_neurons, input_shape[0], figsize=(input_shape[0] * 5, num_neurons * 5))
     for neuron_idx in range(num_neurons):
-        for channel_idx in range(num_channels):
+        for channel_idx in range(input_shape[0]):
             start_idx = channel_idx * num_features_per_channel
             end_idx = start_idx + num_features_per_channel
-            neuron_weights = weights[neuron_idx, start_idx:end_idx].view(input_shape)
+            neuron_weights = weights[neuron_idx, start_idx:end_idx].view(input_shape[1], input_shape[2])
 
             ax = axs[neuron_idx, channel_idx] if num_neurons > 1 else axs[channel_idx]
             # Move to CPU before converting to numpy
@@ -317,12 +337,23 @@ if __name__ == '__main__':
     nn.init.uniform_(net.fc.weight.data, 0.1, 0.3)
     net.fc.weight.data.clamp_(w_min, w_max)
 
-    # STDP parameters
+    # Define weight limits
+    w_min = torch.tensor(0.0)
+    w_max = torch.tensor(0.3)
+
+    # Initialize STDP parameters
     stdp_params = STDPParameters(
-        tau_pre=5.0,
-        tau_post=5.0,
-        A_plus=0.005,
-        A_minus=0.005,
+        a_pre=torch.tensor(1.0),  # Contribution of presynaptic spikes to trace
+        a_post=torch.tensor(-1.0),  # Contribution of postsynaptic spikes to trace (negative for depression)
+        tau_pre_inv=torch.tensor(1 / 5.0),  # Inverse of presynaptic time constant (1 / tau_pre)
+        tau_post_inv=torch.tensor(1 / 5.0),  # Inverse of postsynaptic time constant (1 / tau_post)
+        eta_plus=torch.tensor(0.005),  # Learning rate for potentiation
+        eta_minus=torch.tensor(0.005),  # Learning rate for depression
+        w_min=w_min,
+        w_max=w_max,
+        stdp_algorithm='additive',  # Choose 'additive' or other algorithm as needed
+        mu=torch.tensor(0.0),
+        hardbound=True
     )
 
     # Load dataset
@@ -344,8 +375,15 @@ if __name__ == '__main__':
         print(s)
         frame_gen = dataset.create_frames_generator()
         neuron_state = None  # Initialize neuron state
-        pre_trace = torch.zeros_like(net.fc.weight.data)
-        post_trace = torch.zeros_like(net.fc.weight.data)
+        # Initialize t_pre and t_post tensors
+        t_pre = torch.zeros_like(net.fc.weight.data)
+        t_post = torch.zeros((1, net.fc.out_features), device=device)
+
+        # Create STDPState instance
+        stdp_state = STDPState(
+            t_pre=t_pre,
+            t_post=t_post
+        )
         for idx, combined_input in enumerate(frame_gen):
             print("time step (10ms) ", idx)
             combined_input = combined_input.to(device).unsqueeze(0)
@@ -353,19 +391,19 @@ if __name__ == '__main__':
             z, neuron_state = net(combined_input, neuron_state)
 
             # Reshape inputs and outputs for STDP
-            pre_spikes = combined_input.view(combined_input.size(0), -1)
-            post_spikes = z
+            z_pre = combined_input.view(combined_input.size(0), -1)
+            z_post = z
 
             # Apply STDP update
-            net.fc.weight.data, pre_trace, post_trace = stdp_step(
+            net.fc.weight.data, stdp_state = stdp_step_linear(
                 w=net.fc.weight.data,
-                pre_spikes=pre_spikes,
-                post_spikes=post_spikes,
-                pre_trace=pre_trace,
-                post_trace=post_trace,
-                p=stdp_params,
-                dt=1.0,
+                z_pre=z_pre,
+                z_post=z_post,
+                state_stdp=stdp_state,
+                p_stdp=stdp_params,
+                dt=1.0
             )
+
             # Clamp weights
             net.fc.weight.data.clamp_(w_min, w_max)
 
@@ -374,5 +412,4 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
 
         net.reset()
-    plot_weights(net.fc.weight.data, input_shape=(10, 10), num_channels=4,
-                 save_path="weights_final10x10")
+    plot_weights(net.fc.weight.data, input_shape=input_shape, save_path="weights_final10x10")
