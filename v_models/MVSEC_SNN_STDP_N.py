@@ -268,12 +268,19 @@ class LateralInhibitionLIFCell(nn.Module):
             # Apply inhibition to other neurons
             inhibition_mask = torch.ones_like(z[0], dtype=torch.bool)
             inhibition_mask[winner_idx] = False
+
+            # Modify membrane potentials of inhibited neurons
+            new_v = new_state.v.clone()
+            new_v[0][inhibition_mask] = self.inhibition_strength
+
+            # Update the state with the modified membrane potentials
             new_state = LIFState(
                 z=new_state.z,
-                v=torch.where(inhibition_mask, torch.full_like(new_state.v[0], self.inhibition_strength), new_state.v[0]).unsqueeze(0),
+                v=new_v,
                 i=new_state.i,
             )
-            z[0][inhibition_mask] = 0  # Set spikes of inhibited neurons to zero
+
+            # Do not modify the spikes; keep z as is
 
         return z, new_state
 
@@ -366,7 +373,7 @@ if __name__ == '__main__':
         temporal_window=0.01,  # 10 ms window for temporal resolution
         delay=0.02,
         start_time=1504645177.42 + 6,
-        end_time=1504645177.42 + 10,
+        end_time=1504645177.42 + 15,
         device=device)
     data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)
 
