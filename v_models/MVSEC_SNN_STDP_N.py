@@ -68,10 +68,10 @@ class EventDataset(Dataset):
             with h5py.File(self.file_path, 'r') as f:
                 if '/davis/right/events' in f:
                     total_events = f['/davis/right/events'].shape[0]
-                    print(f"Total events available: {total_events}")
+                    # print(f"Total events available: {total_events}")
 
                     timestamps = f['/davis/right/events'][:, 2]
-                    print(f"First event timestamp: {timestamps[0]}, Last event timestamp: {timestamps[-1]}")
+                    # print(f"First event timestamp: {timestamps[0]}, Last event timestamp: {timestamps[-1]}")
 
                     # Adjust start_time and end_time based on actual timestamps
                     if self.start_time is None:
@@ -79,10 +79,10 @@ class EventDataset(Dataset):
                     if self.end_time is None:
                         self.end_time = timestamps[-1]
 
-                    print(f"Adjusted Start time: {self.start_time}, End time: {self.end_time}")
+                    # print(f"Adjusted Start time: {self.start_time}, End time: {self.end_time}")
 
                     total_to_load = min(total_events, self.max_events) if self.max_events else total_events
-                    print(f"Total events to load: {total_to_load}")
+                    # print(f"Total events to load: {total_to_load}")
 
                     for start in range(0, total_to_load, self.chunk_size):
                         end = min(start + self.chunk_size, total_to_load)
@@ -93,8 +93,9 @@ class EventDataset(Dataset):
                         end_idx = np.searchsorted(events[:, 2], self.end_time, side='right')
 
                         filtered_events = events[start_idx:end_idx]
-                        print(
-                            f"Chunk {start} to {end} — Loaded events from {start_idx} to {end_idx}, total loaded: {len(filtered_events)}")
+                        # print(
+                        #    f"Chunk {start} to {end} —
+                        #    Loaded events from {start_idx} to {end_idx}, total loaded: {len(filtered_events)}")
 
                         events_list.append(filtered_events)
 
@@ -119,8 +120,8 @@ class EventDataset(Dataset):
 
         x_coords = events[:, 0]
         y_coords = events[:, 1]
-        print(f"Event x-coords min: {x_coords.min()}, max: {x_coords.max()}")
-        print(f"Event y-coords min: {y_coords.min()}, max: {y_coords.max()}")
+        # print(f"Event x-coords min: {x_coords.min()}, max: {x_coords.max()}")
+        # print(f"Event y-coords min: {y_coords.min()}, max: {y_coords.max()}")
 
         on_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
         off_frame = np.zeros((self.rf_size, self.rf_size), dtype=np.float32)
@@ -135,8 +136,8 @@ class EventDataset(Dataset):
         y_min = self.center_y - (self.rf_size // 2)
         y_max = self.center_y + (self.rf_size // 2)
 
-        print(f"Receptive field x_min: {x_min}, x_max: {x_max}")
-        print(f"Receptive field y_min: {y_min}, y_max: {y_max}")
+        # print(f"Receptive field x_min: {x_min}, x_max: {x_max}")
+        # print(f"Receptive field y_min: {y_min}, y_max: {y_max}")
 
         for event in events:
             x = int(event[0])
@@ -225,11 +226,11 @@ def custom_lif_step(input_tensor, state, p):
     v_before_reset = v_new.clone()
 
     # Apply reset
-    v_new = torch.where(z_new > 0, v_new - p.v_reset, v_new)
+    v_new = torch.where(z_new > 0, p.v_reset, v_new)
 
     # Return new state and spike output
     new_state = LIFState(z=z_new, v=v_new, i=i_new)
-
+    print("v_before_reset ", v_before_reset)
     return z_new, new_state, v_before_reset
 
 
@@ -325,7 +326,7 @@ def plot_weights(weights, input_shape=(10, 10), num_channels=2, save_path="weigh
 
 if __name__ == '__main__':
     # Network parameters
-    N_out = 8
+    N_out = 4
     S, batch_size, width, height = 1, 1, 346, 260  # height=260, width=346,
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
@@ -364,8 +365,8 @@ if __name__ == '__main__':
         max_events=None,
         temporal_window=0.01,  # 10 ms window for temporal resolution
         delay=0.02,
-        start_time=1504645177.42,
-        end_time=1504645177.42 + 1,
+        start_time=1504645177.42 + 6,
+        end_time=1504645177.42 + 10,
         device=device)
     data_loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)
 
@@ -387,8 +388,11 @@ if __name__ == '__main__':
         for idx, combined_input in enumerate(frame_gen):
             print("time step (10ms) ", idx)
             combined_input = combined_input.to(device).unsqueeze(0)
+            print(combined_input)
             # Forward pass
             z, neuron_state = net(combined_input, neuron_state)
+            print(f"Membrane potentials at time {idx}: {neuron_state.v}")
+            print(f"Spikes at time {idx}: {z}")
 
             # Reshape inputs and outputs for STDP
             z_pre = combined_input.view(combined_input.size(0), -1)
