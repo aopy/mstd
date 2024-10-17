@@ -9,6 +9,7 @@ import h5py
 from norse.torch.functional.lif import LIFParameters, LIFState
 from norse.torch.functional.stdp import stdp_step_linear, STDPParameters
 from norse.torch.functional.stdp import STDPState
+from typing import Tuple
 
 # Seed for reproducibility
 random.seed(8)
@@ -259,7 +260,7 @@ class SNN(nn.Module):
     def __init__(self, input_shape, device):
         super(SNN, self).__init__()
         self.flatten = nn.Flatten()
-        input_size = input_shape[1] * input_shape[2] * input_shape[3]  # Adjusted for batch size
+        input_size = input_shape[0] * input_shape[1] * input_shape[2]
         self.fc = nn.Linear(input_size, 4, bias=False)
         self.lif_neurons = LateralInhibitionLIFCell()
         self.device = device
@@ -275,17 +276,49 @@ class SNN(nn.Module):
     def reset(self):
         pass  # No internal state to reset in the LIF cell
 
+def stdp_step_linear_batch(
+    w: torch.Tensor,
+    z_pre: torch.Tensor,
+    z_post: torch.Tensor,
+    t_pre: torch.Tensor,
+    t_post: torch.Tensor,
+    p_stdp: STDPParameters,
+    dt: float = 1.0,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Update synaptic weights according to the STDP rule with batch processing."""
+    batch_size = z_pre.size(0)
+    for b in range(batch_size):
+        z_pre_b = z_pre[b]  # Shape: [in_features]
+        z_post_b = z_post[b]  # Shape: [out_features]
 
-def plot_weights(weights, input_shape=(10, 10), num_channels=2, save_path="weights"):
+        # Update traces
+        t_pre = t_pre + dt * p_stdp.tau_pre_inv * (-t_pre + p_stdp.a_pre * z_pre_b)
+        t_post[b] = t_post[b] + dt * p_stdp.tau_post_inv * (-t_post[b] + p_stdp.a_post * z_post_b)
+
+        # Compute weight update
+        delta_w = p_stdp.eta_plus * (t_pre * z_post_b.unsqueeze(1)) + \
+                  p_stdp.eta_minus * (z_pre_b.unsqueeze(0) * t_post[b].unsqueeze(1))
+
+        # Update weights
+        w = w + delta_w
+
+    return w, t_pre, t_post
+
+
+
+def plot_weights(weights, input_shape=(4, 10, 10), save_path="weights"):
     num_neurons = weights.shape[0]
-    num_features_per_channel = input_shape[1] * input_shape[2]
+    num_channels = input_shape[0]
+    height = input_shape[1]
+    width = input_shape[2]
+    num_features_per_channel = height * width
 
-    fig, axs = plt.subplots(num_neurons, input_shape[0], figsize=(input_shape[0] * 5, num_neurons * 5))
+    fig, axs = plt.subplots(num_neurons, num_channels, figsize=(num_channels * 5, num_neurons * 5))
     for neuron_idx in range(num_neurons):
-        for channel_idx in range(input_shape[0]):
+        for channel_idx in range(num_channels):
             start_idx = channel_idx * num_features_per_channel
             end_idx = start_idx + num_features_per_channel
-            neuron_weights = weights[neuron_idx, start_idx:end_idx].view(input_shape[1], input_shape[2])
+            neuron_weights = weights[neuron_idx, start_idx:end_idx].view(height, width)
 
             ax = axs[neuron_idx, channel_idx] if num_neurons > 1 else axs[channel_idx]
             # Move to CPU before converting to numpy
@@ -306,7 +339,7 @@ if __name__ == '__main__':
     lr, w_min, w_max = 0.0008, 0.0, 0.3
 
     # Calculate the correct input size for the fully connected layer
-    input_shape = (4, 2, 10, 10)  # Adjusted Channels, Height, Width
+    input_shape = (4, 10, 10)  # Channels, Height, Width
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
     net = SNN(input_shape, device=device)
@@ -373,11 +406,12 @@ if __name__ == '__main__':
             z_post = z
 
             # Apply STDP update
-            net.fc.weight.data, stdp_state = stdp_step_linear(
+            net.fc.weight.data, t_pre, t_post = stdp_step_linear_batch(
                 w=net.fc.weight.data,
                 z_pre=z_pre,
                 z_post=z_post,
-                state_stdp=stdp_state,
+                t_pre=t_pre,
+                t_post=t_post,
                 p_stdp=stdp_params,
                 dt=1.0
             )
@@ -390,4 +424,4 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
 
         net.reset()
-    plot_weights(net.fc.weight.data, input_shape=(input_shape[1], input_shape[2], input_shape[3]), save_path="weights_final10x10")
+    plot_weights(net.fc.weight.data, input_shape=input_shape, save_path="weights_final10x10")
