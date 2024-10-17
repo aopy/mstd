@@ -7,8 +7,11 @@ import numpy as np
 import hdf5plugin
 import h5py
 from norse.torch.functional.lif_adex import LIFAdExParameters, LIFAdExState
+from norse.torch.functional.lif_adex import lif_adex_step
+from norse.torch.functional.threshold import threshold
 from norse.torch.functional.stdp import stdp_step_linear, STDPParameters
 from norse.torch.functional.stdp import STDPState
+from typing import Tuple
 
 # Seed for reproducibility
 random.seed(8)
@@ -194,37 +197,48 @@ class EventDataset(Dataset):
         raise NotImplementedError("Use create_frames_generator() to iterate through the dataset.")
 
 
-def custom_lif_adex_step(input_tensor, state, p):
-    # Unpack the state
-    v, i, w = state.v, state.i, state.w
+def custom_lif_adex_step(
+    input_spikes: torch.Tensor,
+    state: LIFAdExState,
+    p: LIFAdExParameters,
+    dt: float = 0.001,
+) -> Tuple[torch.Tensor, LIFAdExState, torch.Tensor]:
+    """
+    Custom LIF AdEx step function based on Norse's implementation,
+    modified to return the pre-reset membrane potential (v_before_reset).
+    """
+    # compute current jumps
+    i_jump = (
+        state.i
+        + input_spikes
+    )
 
-    # Compute synaptic input current
-    i_new = i + p.tau_syn_inv * (input_tensor - i)
+    # compute voltage updates
+    dv_leak = p.v_leak - state.v
+    dv_exp = p.delta_T * torch.exp((state.v - p.v_th) / p.delta_T)
+    dv = dt * p.tau_mem_inv * (dv_leak + dv_exp + i_jump - state.a)
+    v_decayed = state.v + dv
 
-    # Compute the exponential term
-    exp_term = p.delta_T * torch.exp((v - p.v_th) / p.delta_T)
+    # compute current updates
+    di = -dt * p.tau_syn_inv * i_jump
+    i_decayed = i_jump + di
 
-    # Compute the change in membrane potential
-    v_diff = -(v - p.v_rest) + exp_term + i_new - w
+    # Compute adaptation update
+    da = dt * p.tau_ada_inv * (p.adaptation_current * (state.v - p.v_leak) - state.a)
+    a_decayed = state.a + da
 
-    # Update membrane potential
-    v_new = v + p.tau_mem_inv * v_diff
-
-    # Update adaptation variable w
-    w_new = w + p.tau_adapt_inv * (p.a * (v - p.v_rest) - w)
-
-    # Check for spikes
-    z_new = (v_new >= p.v_peak).to(v_new.dtype)
-
+    # compute new spikes
+    z_new = threshold(v_decayed - p.v_th, p.method, p.alpha)
     # Store pre-reset membrane potential
-    v_before_reset = v_new.clone()
+    v_before_reset = v_decayed.clone()
 
-    # Apply reset
-    v_new = torch.where(z_new > 0, p.v_reset, v_new)
-    w_new = torch.where(z_new > 0, w_new + p.b, w_new)
+    # compute reset
+    v_new = (1 - z_new) * v_decayed + z_new * p.v_reset
 
-    # Return new state and spike output
-    new_state = LIFAdExState(z=z_new, v=v_new, i=i_new, w=w_new)
+    # Compute spike adaptation
+    a_new = a_decayed + z_new * p.adaptation_spike
+
+    new_state = LIFAdExState(z_new, v_new, i_decayed, a_new)
     return z_new, new_state, v_before_reset
 
 
@@ -233,16 +247,17 @@ class LateralInhibitionLIFCell(nn.Module):
         super().__init__()
         if p is None:
             p = LIFAdExParameters(
+                adaptation_current=torch.tensor(4.0),
+                adaptation_spike=torch.tensor(0.02),
+                delta_T=torch.tensor(0.5),
+                tau_ada_inv=torch.tensor(2.0),
                 tau_syn_inv=torch.tensor(0.5),
                 tau_mem_inv=torch.tensor(0.5),
-                tau_adapt_inv=torch.tensor(0.5),
-                v_rest=torch.tensor(0.0),
-                v_reset=torch.tensor(0.0),
+                v_leak=torch.tensor(0.0),
                 v_th=torch.tensor(1.0),
-                v_peak=torch.tensor(30.0),
-                a=torch.tensor(0.0),
-                b=torch.tensor(0.0),
-                delta_T=torch.tensor(1.0),
+                v_reset=torch.tensor(0.0),
+                method='super',
+                alpha=100.0,
             )
         self.p = p
         self.inhibition_strength = inhibition_strength
@@ -255,7 +270,7 @@ class LateralInhibitionLIFCell(nn.Module):
                 z=torch.zeros(batch_size, neuron_count, device=x.device),
                 v=torch.zeros(batch_size, neuron_count, device=x.device),
                 i=torch.zeros(batch_size, neuron_count, device=x.device),
-                w=torch.zeros(batch_size, neuron_count, device=x.device),
+                a=torch.zeros(batch_size, neuron_count, device=x.device),
             )
 
         # Forward through custom LIFAdEx function
@@ -281,16 +296,16 @@ class LateralInhibitionLIFCell(nn.Module):
             new_v = new_state.v.clone()
             new_v[0][inhibition_mask] = self.inhibition_strength
 
-            # Optionally, reset adaptation variable w of inhibited neurons
-            new_w = new_state.w.clone()
-            new_w[0][inhibition_mask] = 0.0  # Or adjust as needed
+            # Optionally, reset adaptation variable a of inhibited neurons
+            new_a = new_state.a.clone()
+            new_a[0][inhibition_mask] = 0.0  # Or adjust as needed
 
             # Update the state with the modified membrane potentials and adaptation variable
             new_state = LIFAdExState(
                 z=new_state.z,
                 v=new_v,
                 i=new_state.i,
-                w=new_w,
+                a=new_a,
             )
 
         return z, new_state
