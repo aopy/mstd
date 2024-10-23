@@ -10,5 +10,5 @@ It utilizes spiking neural networks (SNNs) based on the leaky integrate-and-fire
 
 **Hardware**: The models are capable of running on both CPU and GPU, with CUDA support if available, to enhance computational efficiency and performance.
 
-MSTD stands for dorsal medial superior temporal.
+MSTD stands for Medial Superior Temporal Dorsal.
 

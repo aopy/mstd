@@ -1,3 +1,20 @@
+"""
+Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using Dynamic Vision Sensor (DVS) data
+
+Model Description:
+- Utilizes a single camera setup with DVS input.
+- Processes a center receptive field of size 10x10 pixels.
+- Contains 9 receptive fields arranged in a 3x3 grid, each processed in separate batches.
+- Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
+- Employs Leaky Integrate-and-Fire (LIF) neurons with lateral inhibition to enhance selectivity.
+- Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
+- Uses Norse SNN library.
+
+Data and Preprocessing:
+- Dataset: https://daniilidis-group.github.io/mvsec/
+
+"""
+
 import torch
 import torch.nn as nn
 import random

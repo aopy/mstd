@@ -1,3 +1,18 @@
+"""
+Spiking Neural Network (SNN) with Spike-Timing Dependent Plasticity (STDP) using Dynamic Vision Sensor (DVS) data
+
+Model Description:
+- Utilizes a single camera setup with DVS input.
+- Processes a center receptive field of size 10x10 pixels.
+- Input consists of 4 channels: ON events, OFF events, and their respective delayed versions.
+- Employs Adaptive exponential integrate-and-fire (AdEx) neurons with lateral inhibition to enhance selectivity.
+- Features a single fully connected linear layer to integrate spiking responses from the receptive fields.
+- Uses Norse SNN library.
+
+Data and Preprocessing:
+- Dataset: https://daniilidis-group.github.io/mvsec/
+"""
+
 import torch
 import torch.nn as nn
 import random
@@ -313,6 +328,7 @@ class LateralInhibitionLIFCell(nn.Module):
     def reset(self):
         pass
 
+
 class SNN(nn.Module):
     def __init__(self, input_shape, device):
         super(SNN, self).__init__()
@@ -448,4 +464,4 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
 
         net.reset()
-    plot_weights(net.fc.weight.data, input_shape=input_shape, save_path="weights_final10x10")
+    plot_weights(net.fc.weight.data, input_shape=input_shape, save_path="weights_final_adex_10x10")
